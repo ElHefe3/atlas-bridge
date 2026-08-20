@@ -30,7 +30,7 @@ func Load() (Config, error) {
 		PublicBaseURL:  strings.TrimRight(env("ATLAS_BRIDGE_PUBLIC_BASE_URL", "http://atlas-bridge:8080"), "/"),
 		DataPath:       env("ATLAS_BRIDGE_DATA", "/data/cache.db"),
 		AnnaMirrors:    list("ATLAS_ANNA_MIRRORS", "https://annas-archive.gd,https://annas-archive.gl,https://annas-archive.pk"),
-		LibGenMirrors:  list("ATLAS_LIBGEN_MIRRORS", "https://libgen.li,https://libgen.is"),
+		LibGenMirrors:  list("ATLAS_LIBGEN_MIRRORS", "https://libgen.gl,https://libgen.bz,https://libgen.la,https://libgen.vg"),
 		MetadataLimit:  intEnv("ATLAS_BRIDGE_METADATA_LIMIT", 10<<20),
 		DownloadLimit:  intEnv("ATLAS_BRIDGE_DOWNLOAD_LIMIT", 512<<20),
 		RequestTimeout: durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),

@@ -34,7 +34,7 @@ func (l *LibGen) Info() model.ProviderInfo {
 func (l *LibGen) Search(ctx context.Context, query string, opts model.SearchOptions) (model.SearchResponse, error) {
 	var last error
 	for _, mirror := range l.mirrors {
-		target := strings.TrimRight(mirror, "/") + "/search.php?req=" + url.QueryEscape(query) + "&open=0&res=" + strconv.Itoa(opts.PageSize) + "&view=simple&phrase=1&column=def&page=" + strconv.Itoa(opts.Page)
+		target := strings.TrimRight(mirror, "/") + "/index.php?req=" + url.QueryEscape(query) + "&open=0&res=25&view=simple&phrase=1&column=def&page=" + strconv.Itoa(opts.Page)
 		resp, err := request(ctx, l.client, target, "text/html,application/xhtml+xml")
 		if err != nil {
 			last = err
@@ -55,15 +55,18 @@ func (l *LibGen) Search(ctx context.Context, query string, opts model.SearchOpti
 			last = err
 			continue
 		}
+		if len(books) > opts.PageSize {
+			books = books[:opts.PageSize]
+		}
 		for i := range books {
 			_ = l.cache.Put(books[i])
 		}
 		return model.SearchResponse{ProviderID: "libgen", Query: query, Page: opts.Page, HasMore: len(books) >= opts.PageSize, Results: books}, nil
 	}
-	if last == nil {
-		last = unavailable("libgen", "upstream_unavailable", "no LibGen mirror is configured", true)
+	if pe, ok := last.(*model.ProviderError); ok {
+		return model.SearchResponse{}, pe
 	}
-	return model.SearchResponse{}, last
+	return model.SearchResponse{}, unavailable("libgen", "upstream_unavailable", "all configured LibGen mirrors were unavailable", true)
 }
 
 func (l *LibGen) parseSearch(data []byte, mirror, wantedFormat string) ([]model.Book, error) {

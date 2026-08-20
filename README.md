@@ -30,7 +30,7 @@ Secrets are read from files rather than environment values:
 | `ATLAS_BRIDGE_DATA` | `/data/cache.db` | bbolt metadata cache |
 | `ATLAS_ANNA_MIRRORS` | Current `.gd,.gl,.pk` mirrors | Ordered search and API mirrors |
 | `ATLAS_ANNA_EXTRA_ORIGINS` | `https://download.booksdl.org` | Exact additional cover/download origins |
-| `ATLAS_LIBGEN_MIRRORS` | `https://libgen.li,https://libgen.is` | Ordered search mirrors |
+| `ATLAS_LIBGEN_MIRRORS` | Current `.gl,.bz,.la,.vg` LibGen+ mirrors | Ordered search mirrors |
 | `ATLAS_LIBGEN_EXTRA_ORIGINS` | `https://library.lol,https://download.booksdl.org` | Exact detail/download origins |
 | `ATLAS_BRIDGE_DOWNLOAD_LIMIT` | 512 MiB | Maximum proxied response size |
 | `ATLAS_BRIDGE_REQUEST_TIMEOUT` | 45 seconds | Complete upstream request timeout |
@@ -78,4 +78,3 @@ The deployment files create a rootless Podman network and container without publ
 Run `deploy/install.sh` as `kreef` after copying the repository to the server. It generates but does not print the bridge token, installs the provider manifests, and starts the service. Enter that token through Atlas's credential UI. To enable Anna member downloads, create `/home/kreef/.config/atlas-bridge/secrets/anna-key` interactively with mode `0600`, then restart `atlas-bridge.service`.
 
 Metadata cache data contains no credentials or signed download URLs and may be deleted while the service is stopped. The update timer retains the previous image and restores it when the new container fails its health check.
-
