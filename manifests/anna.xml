@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<provider schemaVersion="1" id="atlas-bridge-anna" name="Anna's Archive (Atlas Bridge)" version="1.0.0">
+  <description>Anna's Archive through a private Atlas Bridge deployment. Use only for material you are legally permitted to access.</description>
+  <capabilities><search>true</search><details>true</details><download>true</download></capabilities>
+  <http>
+    <baseUrl>http://atlas-bridge:8080</baseUrl>
+    <allowedOrigins><origin>http://atlas-bridge:8080</origin></allowedOrigins>
+    <headers><header name="Accept">application/json</header></headers>
+  </http>
+  <authentication type="bearer">
+    <credential id="bridge-token" label="Atlas Bridge token" secret="true" required="true" />
+    <header name="Authorization" value="Bearer {credential.bridge-token}" />
+  </authentication>
+  <search method="GET" path="/v1/providers/anna/search?q={query}&amp;page={page}&amp;pageSize=20" responseType="json">
+    <results jsonPath="$.results[*]">
+      <field name="id" jsonPath="$.externalId" required="true" />
+      <field name="title" jsonPath="$.title" transform="trim" required="true" />
+      <field name="author" jsonPath="$.author" transform="trim" />
+      <field name="description" jsonPath="$.description" transform="trim" />
+      <field name="isbn" jsonPath="$.isbn" transform="trim" />
+      <field name="coverUrl" jsonPath="$.coverUrl" />
+    </results>
+    <pagination><start>1</start><pageParameter>page</pageParameter><pageSize>20</pageSize></pagination>
+  </search>
+  <details method="GET" path="/v1/providers/anna/books/{externalId}" responseType="json">
+    <field name="title" jsonPath="$.title" transform="trim" required="true" />
+    <field name="author" jsonPath="$.author" transform="trim" />
+    <field name="description" jsonPath="$.description" transform="trim" />
+    <field name="isbn" jsonPath="$.isbn" transform="trim" />
+    <field name="coverUrl" jsonPath="$.coverUrl" />
+    <downloads jsonPath="$.files[*]"><download>
+      <url name="url" jsonPath="$.url" required="true" />
+      <format name="format" jsonPath="$.format" transform="lowercase" required="true" />
+      <size name="size" jsonPath="$.size" />
+    </download></downloads>
+  </details>
+  <import><allowedFormats><format>epub</format><format>pdf</format></allowedFormats><path>{author}/{title}/{title}.{extension}</path><maximumBytes>536870912</maximumBytes></import>
+</provider>
+

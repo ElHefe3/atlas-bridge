@@ -1,0 +1,78 @@
+openapi: 3.1.0
+info:
+  title: Atlas Bridge API
+  version: 1.0.0
+  description: A private normalized catalogue API for Kavita Atlas.
+servers:
+  - url: http://atlas-bridge:8080
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  schemas:
+    File:
+      type: object
+      required: [fileId, format, url]
+      properties:
+        fileId: {type: string}
+        format: {type: string, enum: [epub, pdf]}
+        size: {type: [integer, 'null'], format: int64}
+        url: {type: string, format: uri}
+    Book:
+      type: object
+      required: [providerId, externalId, title, files]
+      properties:
+        providerId: {type: string}
+        externalId: {type: string}
+        title: {type: string}
+        author: {type: string}
+        description: {type: string}
+        isbn: {type: string}
+        coverUrl: {type: string, format: uri}
+        files: {type: array, items: {$ref: '#/components/schemas/File'}}
+    Error:
+      type: object
+      required: [code, message, retryable, requestId]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        providerId: {type: string}
+        retryable: {type: boolean}
+        requestId: {type: string}
+security: [{bearerAuth: []}]
+paths:
+  /healthz:
+    get:
+      security: []
+      responses: {'200': {description: Healthy}}
+  /v1/providers:
+    get:
+      responses: {'200': {description: Installed provider metadata}}
+  /v1/providers/{provider}/search:
+    get:
+      parameters:
+        - {in: path, name: provider, required: true, schema: {type: string}}
+        - {in: query, name: q, required: true, schema: {type: string, minLength: 3, maxLength: 500}}
+        - {in: query, name: page, schema: {type: integer, minimum: 1, default: 1}}
+        - {in: query, name: pageSize, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+        - {in: query, name: format, schema: {type: string, enum: [epub, pdf]}}
+      responses: {'200': {description: Normalized search results}, '502': {description: Upstream failure}}
+  /v1/providers/{provider}/books/{externalId}:
+    get:
+      parameters:
+        - {in: path, name: provider, required: true, schema: {type: string}}
+        - {in: path, name: externalId, required: true, schema: {type: string}}
+      responses: {'200': {description: Book details}}
+  /v1/providers/{provider}/books/{externalId}/cover:
+    get:
+      parameters:
+        - {in: path, name: provider, required: true, schema: {type: string}}
+        - {in: path, name: externalId, required: true, schema: {type: string}}
+      responses: {'200': {description: Proxied cover image}}
+  /v1/providers/{provider}/books/{externalId}/files/{fileId}:
+    get:
+      parameters:
+        - {in: path, name: provider, required: true, schema: {type: string}}
+        - {in: path, name: externalId, required: true, schema: {type: string}}
+        - {in: path, name: fileId, required: true, schema: {type: string}}
+      responses: {'200': {description: Proxied book stream}}
+

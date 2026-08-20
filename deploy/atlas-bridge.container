@@ -1,0 +1,26 @@
+[Unit]
+Description=Atlas Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/elhefe3/atlas-bridge:edge
+ContainerName=atlas-bridge
+AuthFile=/home/kreef/.config/containers/auth.json
+Pull=never
+Network=atlas-bridge.network
+Volume=/home/kreef/atlas-bridge/data:/data:Z
+Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
+Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
+HealthCmd=/usr/local/bin/atlas-bridge healthcheck
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+
+[Service]
+Restart=always
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target
+

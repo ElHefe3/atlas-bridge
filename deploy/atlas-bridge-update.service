@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Atlas Bridge with health rollback
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/kreef/atlas-bridge/deploy/update-atlas-bridge.sh
+
