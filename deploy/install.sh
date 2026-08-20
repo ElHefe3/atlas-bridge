@@ -36,6 +36,7 @@ install -m 0600 "${repo_root}/manifests/libgen.xml" "${atlas_config}/providers/a
 
 podman pull --authfile "${auth_file}" "${image}"
 systemctl --user daemon-reload
-systemctl --user enable --now atlas-bridge.service atlas-bridge-update.timer
+systemctl --user start atlas-bridge.service
+systemctl --user enable --now atlas-bridge-update.timer
 echo 'Atlas Bridge installed. Configure its generated bridge token in both Atlas provider credential forms.'
 echo 'The secret remains at /home/kreef/.config/atlas-bridge/secrets/bridge-token and was not printed.'
