@@ -9,6 +9,7 @@ ContainerName=atlas-bridge
 AuthFile=/home/kreef/.config/containers/auth.json
 Pull=never
 Network=atlas-bridge.network
+UserNS=keep-id:uid=65532,gid=65532
 Volume=/home/kreef/atlas-bridge/data:/data:Z
 Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
@@ -23,4 +24,3 @@ TimeoutStartSec=90
 
 [Install]
 WantedBy=default.target
-

@@ -9,11 +9,17 @@ readonly app_root=/home/kreef/atlas-bridge
 readonly secret_root=/home/kreef/.config/atlas-bridge/secrets
 readonly quadlet_root=/home/kreef/.config/containers/systemd
 readonly atlas_config=/home/kreef/kavita/config
+readonly auth_file=/home/kreef/.config/containers/auth.json
 
 [[ "$(id -un)" == "${expected_user}" ]] || { echo "Run as ${expected_user}." >&2; exit 1; }
 test -d "${atlas_config}"
 mkdir -p "${app_root}/data" "${app_root}/deploy" "${secret_root}" "${quadlet_root}" "${atlas_config}/providers"
 chmod 700 "${secret_root}"
+mkdir -p "$(dirname -- "${auth_file}")"
+if [[ ! -f "${auth_file}" ]]; then
+    printf '{"auths":{}}\n' > "${auth_file}"
+    chmod 600 "${auth_file}"
+fi
 if [[ ! -s "${secret_root}/bridge-token" ]]; then
     umask 077
     openssl rand -hex 32 > "${secret_root}/bridge-token"
@@ -28,9 +34,8 @@ install -m 0644 "${source_dir}/atlas-bridge-update.timer" /home/kreef/.config/sy
 install -m 0600 "${repo_root}/manifests/anna.xml" "${atlas_config}/providers/atlas-bridge-anna.xml"
 install -m 0600 "${repo_root}/manifests/libgen.xml" "${atlas_config}/providers/atlas-bridge-libgen.xml"
 
-podman pull --authfile /home/kreef/.config/containers/auth.json "${image}"
+podman pull --authfile "${auth_file}" "${image}"
 systemctl --user daemon-reload
 systemctl --user enable --now atlas-bridge.service atlas-bridge-update.timer
 echo 'Atlas Bridge installed. Configure its generated bridge token in both Atlas provider credential forms.'
 echo 'The secret remains at /home/kreef/.config/atlas-bridge/secrets/bridge-token and was not printed.'
-
