@@ -6,7 +6,6 @@ Wants=network-online.target
 [Container]
 Image=ghcr.io/elhefe3/atlas-bridge:edge
 ContainerName=atlas-bridge
-AuthFile=/home/kreef/.config/containers/auth.json
 Pull=never
 Network=atlas-bridge.network
 UserNS=keep-id:uid=65532,gid=65532
