@@ -32,11 +32,12 @@ func New(origins []string, timeout time.Duration, maxBody int64) (*Client, error
 	}
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
-		Proxy:               nil,
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        32,
-		IdleConnTimeout:     60 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          32,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: timeout,
 	}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
@@ -56,7 +57,7 @@ func New(origins []string, timeout time.Duration, maxBody int64) (*Client, error
 		return nil, errors.New("destination resolved only to blocked addresses")
 	}
 	c := &Client{allowed: allowed, maxBody: maxBody}
-	c.http = &http.Client{Transport: transport, Timeout: timeout}
+	c.http = &http.Client{Transport: transport}
 	c.http.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("redirect limit exceeded")
@@ -116,10 +117,25 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("response exceeds configured size limit")
 	}
 	if c.maxBody > 0 {
-		resp.Body = &limitedReadCloser{Reader: io.LimitReader(resp.Body, c.maxBody+1), Closer: resp.Body, limit: c.maxBody}
+		idleBody := &idleReadCloser{body: resp.Body, timeout: time.Minute}
+		resp.Body = &limitedReadCloser{Reader: io.LimitReader(idleBody, c.maxBody+1), Closer: idleBody, limit: c.maxBody}
 	}
 	return resp, nil
 }
+
+type idleReadCloser struct {
+	body    io.ReadCloser
+	timeout time.Duration
+}
+
+func (r *idleReadCloser) Read(p []byte) (int, error) {
+	timer := time.AfterFunc(r.timeout, func() { _ = r.body.Close() })
+	n, err := r.body.Read(p)
+	_ = timer.Stop()
+	return n, err
+}
+
+func (r *idleReadCloser) Close() error { return r.body.Close() }
 
 type limitedReadCloser struct {
 	io.Reader
