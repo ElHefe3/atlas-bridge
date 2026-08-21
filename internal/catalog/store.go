@@ -106,12 +106,37 @@ func (s *Store) Search(ctx context.Context, query string, page, pageSize int, fo
 		if err := json.Unmarshal([]byte(files), &b.Files); err != nil {
 			return nil, false, err
 		}
+		if merged, mergeErr := s.fileRecords(ctx, b.ProviderID, b.ExternalID); mergeErr != nil {
+			return nil, false, mergeErr
+		} else if len(merged) > 0 {
+			b.Files = merged
+		}
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
 	return out, len(out) == pageSize, nil
+}
+
+func (s *Store) fileRecords(ctx context.Context, provider, external string) ([]model.File, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT file_id,format,size,md5,aacid FROM file_records WHERE provider_id=? AND external_id=? ORDER BY format`, provider, external)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []model.File
+	for rows.Next() {
+		var f model.File
+		var md5, aacid sql.NullString
+		if err := rows.Scan(&f.FileID, &f.Format, &f.Size, &md5, &aacid); err != nil {
+			return nil, err
+		}
+		f.MD5 = md5.String
+		f.AACID = aacid.String
+		files = append(files, f)
+	}
+	return files, rows.Err()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
