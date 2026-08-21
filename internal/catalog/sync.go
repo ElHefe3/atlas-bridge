@@ -220,6 +220,9 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 	if err := flush(); err != nil {
 		return records, skipped, err
 	}
+	if err := s.RebuildFTS(ctx); err != nil {
+		return records, skipped, err
+	}
 	return records, skipped, scanner.Err()
 }
 

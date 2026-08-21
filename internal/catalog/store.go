@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS locators (provider_id TEXT NOT NULL, external_id TEXT
 }
 
 func (s *Store) Upsert(ctx context.Context, book model.Book) error {
-	return s.upsertExec(ctx, s.db, book)
+	return s.upsertExec(ctx, s.db, book, true)
 }
 
 func (s *Store) UpsertBatch(ctx context.Context, books []model.Book) error {
@@ -54,12 +54,15 @@ func (s *Store) UpsertBatch(ctx context.Context, books []model.Book) error {
 		return err
 	}
 	for _, book := range books {
-		if err := s.upsertExec(ctx, tx, book); err != nil {
+		if err := s.upsertExec(ctx, tx, book, false); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) UpsertFilesBatch(ctx context.Context, files []FileRecord) error {
@@ -93,7 +96,7 @@ type FileRecord struct {
 	Locator                                            *Locator
 }
 
-func (s *Store) upsertExec(ctx context.Context, exec sqlExecer, book model.Book) error {
+func (s *Store) upsertExec(ctx context.Context, exec sqlExecer, book model.Book, index bool) error {
 	b, err := json.Marshal(book.Files)
 	if err != nil {
 		return err
@@ -106,8 +109,10 @@ func (s *Store) upsertExec(ctx context.Context, exec sqlExecer, book model.Book)
 	if err = exec.QueryRowContext(ctx, `SELECT rowid FROM books WHERE provider_id=? AND external_id=?`, book.ProviderID, book.ExternalID).Scan(&rowid); err != nil {
 		return err
 	}
-	_, _ = exec.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid=?`, rowid)
-	_, err = exec.ExecContext(ctx, `INSERT INTO books_fts(rowid,provider_id,external_id,title,author,isbn) VALUES(?,?,?,?,?,?)`, rowid, book.ProviderID, book.ExternalID, book.Title, book.Author, book.ISBN)
+	if index {
+		_, _ = exec.ExecContext(ctx, `DELETE FROM books_fts WHERE rowid=?`, rowid)
+		_, err = exec.ExecContext(ctx, `INSERT INTO books_fts(rowid,provider_id,external_id,title,author,isbn) VALUES(?,?,?,?,?,?)`, rowid, book.ProviderID, book.ExternalID, book.Title, book.Author, book.ISBN)
+	}
 	for _, file := range book.Files {
 		if _, fileErr := exec.ExecContext(ctx, `INSERT INTO file_records(provider_id,external_id,file_id,md5,aacid,format,size) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,format=excluded.format,size=excluded.size`, book.ProviderID, book.ExternalID, file.FileID, nullable(file.MD5), nullable(file.AACID), file.Format, file.Size); fileErr != nil {
 			return fileErr
