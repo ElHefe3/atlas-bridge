@@ -1,7 +1,7 @@
 [Unit]
 Description=Atlas Bridge
-After=network-online.target
-Wants=network-online.target
+After=network-online.target atlas-transmission.service
+Wants=network-online.target atlas-transmission.service
 
 [Container]
 Image=ghcr.io/elhefe3/atlas-bridge:edge
@@ -12,6 +12,7 @@ UserNS=keep-id:uid=65532,gid=65532
 Volume=/home/kreef/atlas-bridge/data:/data:Z
 Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
+Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/rpc
 HealthCmd=/usr/local/bin/atlas-bridge healthcheck
 HealthInterval=30s
 HealthTimeout=10s

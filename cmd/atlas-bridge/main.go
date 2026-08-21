@@ -17,6 +17,7 @@ import (
 	"github.com/ElHefe3/atlas-bridge/internal/model"
 	"github.com/ElHefe3/atlas-bridge/internal/providers"
 	"github.com/ElHefe3/atlas-bridge/internal/safehttp"
+	"github.com/ElHefe3/atlas-bridge/internal/torrent"
 )
 
 func main() {
@@ -73,7 +74,9 @@ func main() {
 		os.Exit(1)
 	}
 	registered := []model.Provider{providers.NewAnna(annaHTTP, store, cfg.AnnaMirrors, cfg.AnnaKey), providers.NewLibGen(libgenHTTP, store, cfg.LibGenMirrors)}
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: api.NewWithCatalogueAndProviders(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger, catalogue, cfg.DataPath+"-staging", cfg.DownloadLimit).Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
+	serverAPI := api.NewWithCatalogueAndProviders(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger, catalogue, cfg.DataPath+"-staging", cfg.DownloadLimit)
+	server := &http.Server{Addr: cfg.ListenAddress, Handler: serverAPI.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
+	serverAPI.ConfigureTorrentSources(catalogue, torrent.NewTransmission(cfg.TransmissionRPC))
 	go func() {
 		logger.Info("Atlas Bridge listening", "address", cfg.ListenAddress)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

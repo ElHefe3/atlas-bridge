@@ -30,7 +30,8 @@ func Open(path string) (*Store, error) {
 	}
 	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS books (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT, description TEXT, isbn TEXT, cover_url TEXT, files_json TEXT NOT NULL, PRIMARY KEY(provider_id, external_id));
-CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(provider_id UNINDEXED, external_id UNINDEXED, title, author, isbn, content='books', content_rowid='rowid');`); err != nil {
+CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(provider_id UNINDEXED, external_id UNINDEXED, title, author, isbn, content='books', content_rowid='rowid');
+CREATE TABLE IF NOT EXISTS locators (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, file_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(provider_id, external_id, file_id));`); err != nil {
 		db.Close()
 		return nil, err
 	}

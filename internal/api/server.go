@@ -18,6 +18,7 @@ import (
 	"github.com/ElHefe3/atlas-bridge/internal/acquisition"
 	"github.com/ElHefe3/atlas-bridge/internal/catalog"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
+	"github.com/ElHefe3/atlas-bridge/internal/torrent"
 )
 
 type Server struct {
@@ -46,6 +47,10 @@ func NewWithCatalogueAndProviders(token, publicBase string, providers []model.Pr
 	s.catalog = store
 	s.acquisitions = acquisition.NewManagerWithProviders(providers, staging, maxBytes)
 	return s
+}
+
+func (s *Server) ConfigureTorrentSources(store *catalog.Store, client *torrent.Transmission) {
+	s.acquisitions.SetTorrentSources(store, client)
 }
 
 func (s *Server) Handler() http.Handler {

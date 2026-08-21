@@ -4,22 +4,32 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/ElHefe3/atlas-bridge/internal/catalog"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
+	"github.com/ElHefe3/atlas-bridge/internal/torrent"
 )
 
 type Manager struct {
-	mu        sync.RWMutex
-	jobs      map[string]*model.Acquisition
-	files     map[string]io.ReadCloser
-	providers map[string]model.Provider
-	staging   string
-	maxBytes  int64
+	mu           sync.RWMutex
+	jobs         map[string]*model.Acquisition
+	files        map[string]io.ReadCloser
+	providers    map[string]model.Provider
+	staging      string
+	maxBytes     int64
+	locators     *catalog.Store
+	transmission *torrent.Transmission
+}
+
+func (m *Manager) SetTorrentSources(locators *catalog.Store, client *torrent.Transmission) {
+	m.locators = locators
+	m.transmission = client
 }
 
 func NewManager() *Manager {
@@ -61,6 +71,16 @@ func (m *Manager) run(id string, req model.AcquisitionRequest) {
 		return
 	}
 	m.update(id, func(j *model.Acquisition) { j.Status = model.AcquisitionDownloading; j.Progress = .05 })
+	if m.locators != nil && m.transmission != nil {
+		if locator, ok, err := m.locators.GetLocator(context.Background(), req.ProviderID, req.ExternalID, req.FileID); err == nil && ok && locator.Kind == catalog.LocatorTorrentFile {
+			if err := m.runTorrent(id, req, locator); err == nil {
+				return
+			} else {
+				m.fail(id, err.Error())
+				return
+			}
+		}
+	}
 	remote, err := p.OpenFile(context.Background(), req.ExternalID, req.FileID)
 	if err != nil {
 		m.fail(id, err.Error())
@@ -145,6 +165,49 @@ func (m *Manager) run(id string, req model.AcquisitionRequest) {
 		m.files[id] = f
 	}
 	m.mu.Unlock()
+}
+
+func (m *Manager) runTorrent(id string, req model.AcquisitionRequest, locator catalog.Locator) error {
+	if filepath.IsAbs(locator.Path) || strings.Contains(filepath.ToSlash(locator.Path), "../") {
+		return fmt.Errorf("unsafe torrent path")
+	}
+	dir := filepath.Join(m.staging, id+"-torrent")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	file, size, err := m.transmission.DownloadFile(context.Background(), torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: dir}, filepath.Join(dir, locator.Path), m.maxBytes)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	part := filepath.Join(m.staging, id+".part")
+	out, err := os.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, file)
+	syncErr := out.Sync()
+	closeErr := out.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil {
+		_ = os.Remove(part)
+		return fmt.Errorf("torrent staging failed")
+	}
+	if !validSignature(part, req.FileID) {
+		_ = os.Remove(part)
+		return fmt.Errorf("downloaded file failed signature validation")
+	}
+	m.mu.Lock()
+	if j := m.jobs[id]; j != nil {
+		j.Status = model.AcquisitionCompleted
+		j.Progress = 1
+		j.Bytes = size
+	}
+	if f, openErr := os.Open(part); openErr == nil {
+		m.files[id] = f
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 func validSignature(path, format string) bool {

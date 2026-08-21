@@ -1,0 +1,23 @@
+[Unit]
+Description=Private Transmission daemon for Atlas Bridge
+After=atlas-bridge.network
+Requires=atlas-bridge.network
+
+[Container]
+Image=docker.io/linuxserver/transmission:4.0.6
+ContainerName=atlas-transmission
+Network=atlas-bridge.network
+Environment=PUID=65532
+Environment=PGID=65532
+Environment=TZ=Africa/Johannesburg
+Environment=TRANSMISSION_WEB_HOME=/combustion-release/
+Environment=TRANSMISSION_RPC_AUTHENTICATION_REQUIRED=false
+Volume=/home/kreef/atlas-bridge/transmission:/config:Z
+Volume=/home/kreef/atlas-bridge/data/torrents:/downloads:Z
+
+[Service]
+Restart=always
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

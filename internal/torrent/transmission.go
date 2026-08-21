@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -100,4 +102,54 @@ func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
 }
 func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) error {
 	return t.call(ctx, "torrent-remove", map[string]any{"ids": []int{id}, "delete-local-data": deleteData}, nil)
+}
+
+// DownloadFile queues a validated torrent and waits for the requested file to
+// complete. The caller must provide a path inside the Bridge staging root.
+func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path string, maxBytes int64) (*os.File, int64, error) {
+	added, err := t.Add(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer t.Remove(context.Background(), added.ID, true)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		status, err := t.Get(ctx, added.ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if status.TotalSize > maxBytes && maxBytes > 0 {
+			return nil, 0, fmt.Errorf("torrent exceeds configured size limit")
+		}
+		if status.Error != "" {
+			return nil, 0, fmt.Errorf("transmission: %s", status.Error)
+		}
+		if status.PercentDone >= 1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	filePath := path
+	if !filepath.IsAbs(filePath) {
+		return nil, 0, fmt.Errorf("staging path must be absolute")
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, err
+	}
+	if maxBytes > 0 && info.Size() > maxBytes {
+		f.Close()
+		return nil, 0, fmt.Errorf("download exceeds configured size limit")
+	}
+	return f, info.Size(), nil
 }
