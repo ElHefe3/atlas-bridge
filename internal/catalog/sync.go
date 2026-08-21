@@ -43,8 +43,8 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 		if limit > 0 && records >= limit {
 			break
 		}
-		var r AnnaRecord
-		if err := json.Unmarshal(scanner.Bytes(), &r); err != nil {
+		r, err := decodeAnnaRecord(scanner.Bytes())
+		if err != nil {
 			skipped++
 			continue
 		}
@@ -87,6 +87,67 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 		records++
 	}
 	return records, skipped, scanner.Err()
+}
+
+// decodeAnnaRecord accepts both the bridge's normalized shape and common Anna
+// metadata aliases. It intentionally ignores unknown/nested source fields.
+func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
+	var r AnnaRecord
+	if err := json.Unmarshal(data, &r); err != nil {
+		return r, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return r, err
+	}
+	str := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := raw[k].(string); ok && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+		return ""
+	}
+	if r.Title == "" {
+		r.Title = str("title", "title_sort", "book_title")
+	}
+	if r.Author == "" {
+		r.Author = str("author", "authors", "author_name")
+	}
+	if r.ISBN == "" {
+		r.ISBN = str("isbn", "isbn13", "isbn_10")
+	}
+	if r.ExternalID == "" {
+		r.ExternalID = str("externalId", "external_id", "md5", "aacid")
+	}
+	if r.MD5 == "" {
+		r.MD5 = str("md5")
+	}
+	if r.AACID == "" {
+		r.AACID = str("aacid")
+	}
+	if r.Format == "" {
+		r.Format = str("format", "extension", "ext")
+	}
+	if r.CoverURL == "" {
+		r.CoverURL = str("coverUrl", "cover_url", "cover")
+	}
+	if r.Torrent == "" {
+		r.Torrent = str("torrent", "torrent_url", "metainfo")
+	}
+	if r.Path == "" {
+		r.Path = str("path", "torrent_path", "file_path")
+	}
+	if r.Size == nil {
+		r.Size = parseInt64(raw["size"])
+	}
+	if r.Size == nil {
+		r.Size = parseInt64(raw["filesize"])
+	}
+	if r.FileSize == nil {
+		r.FileSize = parseInt64(raw["filesize"])
+	}
+	return r, nil
 }
 
 // IngestZstdJSONL streams a seekable or regular zstd-compressed JSONL dump.
