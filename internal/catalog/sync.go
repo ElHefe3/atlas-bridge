@@ -55,8 +55,8 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 		if limit > 0 && count >= limit {
 			break
 		}
-		var r AnnaFileRecord
-		if json.Unmarshal(scanner.Bytes(), &r) != nil {
+		r, decodeErr := decodeAnnaFileRecord(scanner.Bytes())
+		if decodeErr != nil {
 			skipped++
 			continue
 		}
@@ -87,6 +87,50 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 		count++
 	}
 	return count, skipped, scanner.Err()
+}
+
+func decodeAnnaFileRecord(data []byte) (AnnaFileRecord, error) {
+	var r AnnaFileRecord
+	if err := json.Unmarshal(data, &r); err != nil {
+		return r, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return r, err
+	}
+	str := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := raw[k].(string); ok && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+		return ""
+	}
+	if r.ExternalID == "" {
+		r.ExternalID = str("externalId", "external_id", "md5", "aacid")
+	}
+	if r.MD5 == "" {
+		r.MD5 = str("md5")
+	}
+	if r.AACID == "" {
+		r.AACID = str("aacid")
+	}
+	if r.Format == "" {
+		r.Format = str("format", "extension", "ext", "file_extension")
+	}
+	if r.Size == nil {
+		r.Size = parseInt64(raw["size"])
+		if r.Size == nil {
+			r.Size = parseInt64(raw["filesize"])
+		}
+	}
+	if r.Torrent == "" {
+		r.Torrent = str("torrent", "torrent_url", "metainfo")
+	}
+	if r.Path == "" {
+		r.Path = str("path", "torrent_path", "file_path")
+	}
+	return r, nil
 }
 
 // SyncAnnaJSONL imports normalized Anna records without loading the dump into memory.
