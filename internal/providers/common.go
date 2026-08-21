@@ -54,5 +54,9 @@ func normalizeFormat(value string) string {
 }
 
 func unavailable(provider, code, message string, retryable bool) error {
-	return &model.ProviderError{Code: code, Message: message, Provider: provider, Retryable: retryable, Status: http.StatusBadGateway}
+	status := http.StatusBadGateway
+	if code == "upstream_challenge" || code == "upstream_unavailable" {
+		status = http.StatusServiceUnavailable
+	}
+	return &model.ProviderError{Code: code, Message: message, Provider: provider, Retryable: retryable, Status: status}
 }

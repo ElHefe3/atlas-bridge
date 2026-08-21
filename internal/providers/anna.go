@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ElHefe3/atlas-bridge/internal/cache"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
@@ -22,10 +24,12 @@ var annaMD5 = regexp.MustCompile(`(?i)/md5/([a-f0-9]{32})`)
 var sizePattern = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB)`)
 
 type Anna struct {
-	client  *safehttp.Client
-	cache   *cache.Store
-	mirrors []string
-	key     string
+	client         *safehttp.Client
+	cache          *cache.Store
+	mirrors        []string
+	key            string
+	challengeMu    sync.RWMutex
+	challengeUntil time.Time
 }
 
 func NewAnna(client *safehttp.Client, store *cache.Store, mirrors []string, key string) *Anna {
@@ -37,6 +41,11 @@ func (a *Anna) Info() model.ProviderInfo {
 }
 
 func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOptions) (model.SearchResponse, error) {
+	if a.challengeActive(time.Now()) {
+		return model.SearchResponse{}, unavailable("anna", "upstream_challenge", "Anna's Archive browser verification is still active; retry later", true)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var last error
 	for _, mirror := range a.mirrors {
 		target := strings.TrimRight(mirror, "/") + "/search?q=" + url.QueryEscape(query) + "&page=" + strconv.Itoa(opts.Page)
@@ -52,8 +61,8 @@ func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOption
 			continue
 		}
 		if isChallenge(data) {
-			last = unavailable("anna", "upstream_challenge", "Anna's Archive requires browser verification on this mirror", true)
-			continue
+			a.markChallenge(time.Now().Add(15 * time.Minute))
+			return model.SearchResponse{}, unavailable("anna", "upstream_challenge", "Anna's Archive requires browser verification on this mirror", true)
 		}
 		if err = requireOK("anna", resp); err != nil {
 			last = err
@@ -67,12 +76,31 @@ func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOption
 		for i := range books {
 			_ = a.cache.Put(books[i])
 		}
+		a.clearChallenge()
 		return model.SearchResponse{ProviderID: "anna", Query: query, Page: opts.Page, HasMore: len(books) >= opts.PageSize, Results: books}, nil
 	}
 	if last == nil {
 		last = unavailable("anna", "upstream_unavailable", "no Anna's Archive mirror is configured", true)
 	}
 	return model.SearchResponse{}, last
+}
+
+func (a *Anna) challengeActive(now time.Time) bool {
+	a.challengeMu.RLock()
+	defer a.challengeMu.RUnlock()
+	return now.Before(a.challengeUntil)
+}
+
+func (a *Anna) markChallenge(until time.Time) {
+	a.challengeMu.Lock()
+	a.challengeUntil = until
+	a.challengeMu.Unlock()
+}
+
+func (a *Anna) clearChallenge() {
+	a.challengeMu.Lock()
+	a.challengeUntil = time.Time{}
+	a.challengeMu.Unlock()
 }
 
 func isChallenge(data []byte) bool {

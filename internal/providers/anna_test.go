@@ -1,6 +1,9 @@
 package providers
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAnnaParsesMultipleResults(t *testing.T) {
 	html := `<html><body>
@@ -17,6 +20,21 @@ func TestAnnaParsesMultipleResults(t *testing.T) {
 	}
 	if books[0].Files[0].Format != "epub" || books[0].CoverURL != "https://annas.example/covers/alice.jpg" {
 		t.Fatalf("unexpected book: %#v", books[0])
+	}
+}
+
+func TestAnnaChallengeCircuitBreaker(t *testing.T) {
+	a := &Anna{}
+	if a.challengeActive(time.Now()) {
+		t.Fatal("new adapter unexpectedly challenged")
+	}
+	a.markChallenge(time.Now().Add(time.Minute))
+	if !a.challengeActive(time.Now()) {
+		t.Fatal("challenge circuit did not open")
+	}
+	a.clearChallenge()
+	if a.challengeActive(time.Now()) {
+		t.Fatal("challenge circuit did not close")
 	}
 }
 
