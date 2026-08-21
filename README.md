@@ -28,6 +28,9 @@ Secrets are read from files rather than environment values:
 | `ATLAS_ANNA_KEY_FILE` | `/run/secrets/anna-key` | Optional Anna member fast-download key |
 | `ATLAS_BRIDGE_PUBLIC_BASE_URL` | `http://atlas-bridge:8080` | Origin written into normalized cover/file URLs |
 | `ATLAS_BRIDGE_DATA` | `/data/cache.db` | bbolt metadata cache |
+| `ATLAS_BRIDGE_CATALOGUE_JSONL` | empty | Optional normalized JSONL catalogue to ingest at startup |
+| `ATLAS_BRIDGE_CATALOGUE_ZSTD` | empty | Optional `.jsonl.zst`/seekable-zstd catalogue to stream-ingest at startup |
+| `ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED` | 50 GiB | Hard expanded-size ceiling for compressed metadata ingestion |
 | `ATLAS_ANNA_MIRRORS` | Current `.gd,.gl,.pk` mirrors | Ordered search and API mirrors |
 | `ATLAS_ANNA_EXTRA_ORIGINS` | `https://download.booksdl.org` | Exact additional cover/download origins |
 | `ATLAS_LIBGEN_MIRRORS` | Current `.gl,.bz,.la,.vg` LibGen+ mirrors | Ordered search mirrors |
@@ -55,6 +58,8 @@ go run ./cmd/atlas-bridge
 ```
 
 The Anna adapter uses fixed, bounded HTML selectors and never executes page JavaScript. When a mirror returns a DDoS/browser challenge, the API returns `upstream_challenge`; it does not pretend an empty result set was successful. The official member endpoint is used only after an MD5 and requested file have been selected.
+
+For local catalogue mode, point `ATLAS_BRIDGE_CATALOGUE_ZSTD` at a mounted lawful/public-domain metadata fixture or dataset. The bridge streams JSONL records through a single zstd decoder and imports normalized records into SQLite/FTS5; it does not download or index content payload torrents. Each record may include `md5`/`aacid`, `format`, `filesize`, `coverUrl`, and a separate `torrent` plus relative `path` locator. Only a selected file is eligible for acquisition.
 
 The LibGen adapter searches configured mirrors, normalizes classic result tables, and resolves download pages through bounded HTTP hops. Mirror layouts and availability change frequently, so parsing failures are explicit and retryability is communicated in the error response.
 

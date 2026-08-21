@@ -13,6 +13,8 @@ Volume=/home/kreef/atlas-bridge/data:/data:Z
 Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
 Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/rpc
+# Set ATLAS_BRIDGE_CATALOGUE_ZSTD to a mounted lawful/public-domain fixture
+# when enabling local metadata ingestion; content torrents are never indexed.
 HealthCmd=/usr/local/bin/atlas-bridge healthcheck
 HealthInterval=30s
 HealthTimeout=10s

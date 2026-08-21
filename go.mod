@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.2
+	github.com/klauspost/compress v1.17.11
 	go.etcd.io/bbolt v1.4.0
 )
 

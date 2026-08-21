@@ -58,6 +58,20 @@ func (s *Store) Upsert(ctx context.Context, book model.Book) error {
 
 func (s *Store) Search(ctx context.Context, query string, page, pageSize int, format string) ([]model.Book, bool, error) {
 	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, false, nil
+	}
+	// Treat user input as terms, never as an FTS expression. This prevents
+	// punctuation such as ':' or '-' from changing the query grammar.
+	terms := strings.Fields(query)
+	quoted := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.ReplaceAll(term, `"`, "")
+		if term != "" {
+			quoted = append(quoted, `"`+term+`"*`)
+		}
+	}
+	query = strings.Join(quoted, " AND ")
 	args := []any{query, pageSize, (page - 1) * pageSize}
 	filter := ""
 	if format != "" {
