@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type Transmission struct {
 
 type AddRequest struct {
 	Metainfo    string `json:"metainfo"`
+	Filename    string `json:"filename,omitempty"`
 	DownloadDir string `json:"download-dir"`
 	FilesWanted []int  `json:"files-wanted,omitempty"`
 }
@@ -94,6 +96,10 @@ func (t *Transmission) call(ctx context.Context, method string, args any, out an
 }
 
 func (t *Transmission) Add(ctx context.Context, req AddRequest) (AddResponse, error) {
+	if strings.HasPrefix(req.Metainfo, "http://") || strings.HasPrefix(req.Metainfo, "https://") || strings.HasPrefix(req.Metainfo, "magnet:") {
+		req.Filename = req.Metainfo
+		req.Metainfo = ""
+	}
 	var out struct {
 		TorrentAdd AddResponse `json:"torrent-added"`
 	}
