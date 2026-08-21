@@ -38,6 +38,20 @@ components:
         providerId: {type: string}
         retryable: {type: boolean}
         requestId: {type: string}
+    Acquisition:
+      type: object
+      required: [id, providerId, externalId, fileId, format, status, progress, bytesDownloaded]
+      properties:
+        id: {type: string}
+        providerId: {type: string}
+        externalId: {type: string}
+        fileId: {type: string}
+        format: {type: string, enum: [epub, pdf]}
+        status: {type: string, enum: [queued, resolving, downloading, completed, failed, cancelled]}
+        progress: {type: number, minimum: 0, maximum: 1}
+        bytesDownloaded: {type: integer, format: int64}
+        totalBytes: {type: [integer, 'null'], format: int64}
+        error: {type: string}
 security: [{bearerAuth: []}]
 paths:
   /healthz:
@@ -75,4 +89,37 @@ paths:
         - {in: path, name: externalId, required: true, schema: {type: string}}
         - {in: path, name: fileId, required: true, schema: {type: string}}
       responses: {'200': {description: Proxied book stream}}
-
+  /v1/search:
+    get:
+      parameters:
+        - {in: query, name: q, required: true, schema: {type: string, minLength: 2, maxLength: 500}}
+        - {in: query, name: page, schema: {type: integer, minimum: 1, default: 1}}
+        - {in: query, name: pageSize, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+        - {in: query, name: format, schema: {type: string, enum: [epub, pdf]}}
+      responses: {'200': {description: Local normalized search results}}
+  /v1/acquisitions:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId, externalId, fileId]
+              properties:
+                providerId: {type: string}
+                externalId: {type: string}
+                fileId: {type: string}
+      responses: {'202': {description: Acquisition queued, content: {application/json: {schema: {$ref: '#/components/schemas/Acquisition'}}}}}
+  /v1/acquisitions/{id}:
+    get:
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Acquisition status, content: {application/json: {schema: {$ref: '#/components/schemas/Acquisition'}}}}}
+  /v1/acquisitions/{id}/cancel:
+    post:
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Cancelled acquisition}}
+  /v1/acquisitions/{id}/file:
+    get:
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses: {'200': {description: Completed staged file}}

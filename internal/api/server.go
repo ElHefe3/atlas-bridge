@@ -15,14 +15,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElHefe3/atlas-bridge/internal/acquisition"
+	"github.com/ElHefe3/atlas-bridge/internal/catalog"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
 )
 
 type Server struct {
-	token      []byte
-	publicBase string
-	providers  map[string]model.Provider
-	logger     *slog.Logger
+	token        []byte
+	publicBase   string
+	providers    map[string]model.Provider
+	logger       *slog.Logger
+	catalog      *catalog.Store
+	acquisitions *acquisition.Manager
 }
 
 func New(token, publicBase string, providers []model.Provider, logger *slog.Logger) *Server {
@@ -30,18 +34,98 @@ func New(token, publicBase string, providers []model.Provider, logger *slog.Logg
 	for _, p := range providers {
 		index[p.Info().ID] = p
 	}
-	return &Server{token: []byte(token), publicBase: strings.TrimRight(publicBase, "/"), providers: index, logger: logger}
+	return &Server{token: []byte(token), publicBase: strings.TrimRight(publicBase, "/"), providers: index, logger: logger, acquisitions: acquisition.NewManager()}
+}
+
+func NewWithCatalogue(token, publicBase string, providers []model.Provider, logger *slog.Logger, store *catalog.Store) *Server {
+	return NewWithCatalogueAndProviders(token, publicBase, providers, logger, store, "", 0)
+}
+
+func NewWithCatalogueAndProviders(token, publicBase string, providers []model.Provider, logger *slog.Logger, store *catalog.Store, staging string, maxBytes int64) *Server {
+	s := New(token, publicBase, providers, logger)
+	s.catalog = store
+	s.acquisitions = acquisition.NewManagerWithProviders(providers, staging, maxBytes)
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /v1/providers", s.providersList)
+	mux.HandleFunc("GET /v1/search", s.globalSearch)
 	mux.HandleFunc("GET /v1/providers/{provider}/search", s.search)
 	mux.HandleFunc("GET /v1/providers/{provider}/books/{book}", s.details)
 	mux.HandleFunc("GET /v1/providers/{provider}/books/{book}/cover", s.cover)
 	mux.HandleFunc("GET /v1/providers/{provider}/books/{book}/files/{file}", s.file)
+	mux.HandleFunc("POST /v1/acquisitions", s.createAcquisition)
+	mux.HandleFunc("GET /v1/acquisitions/{id}", s.getAcquisition)
+	mux.HandleFunc("POST /v1/acquisitions/{id}/cancel", s.cancelAcquisition)
+	mux.HandleFunc("GET /v1/acquisitions/{id}/file", s.acquisitionFile)
 	return s.requestContext(s.authenticate(mux))
+}
+
+func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) {
+	if s.catalog == nil {
+		s.writeError(w, r, &model.ProviderError{Code: "catalogue_unavailable", Message: "local catalogue is not configured", Status: http.StatusServiceUnavailable, Retryable: true})
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) < 2 || len(q) > 500 {
+		s.writeError(w, r, bad("invalid_query", "q must contain 2 to 500 characters"))
+		return
+	}
+	page := boundedInt(r.URL.Query().Get("page"), 1, 1, 10000)
+	size := boundedInt(r.URL.Query().Get("pageSize"), 20, 1, 50)
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	books, more, err := s.catalog.Search(r.Context(), q, page, size, format)
+	if err != nil {
+		s.writeError(w, r, &model.ProviderError{Code: "catalogue_search_failed", Message: "local catalogue search failed", Status: http.StatusServiceUnavailable, Retryable: true})
+		return
+	}
+	for i := range books {
+		s.decorate(&books[i])
+	}
+	writeJSON(w, http.StatusOK, model.SearchResponse{ProviderID: "", Query: q, Page: page, HasMore: more, Results: books})
+}
+
+func (s *Server) createAcquisition(w http.ResponseWriter, r *http.Request) {
+	var req model.AcquisitionRequest
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req) != nil || req.ProviderID == "" || req.ExternalID == "" || req.FileID == "" {
+		s.writeError(w, r, bad("invalid_acquisition", "providerId, externalId and fileId are required"))
+		return
+	}
+	job, err := s.acquisitions.Create(r.Context(), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+func (s *Server) getAcquisition(w http.ResponseWriter, r *http.Request) {
+	job, ok := s.acquisitions.Get(r.PathValue("id"))
+	if !ok {
+		s.writeError(w, r, &model.ProviderError{Code: "acquisition_not_found", Message: "acquisition was not found", Status: http.StatusNotFound})
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+func (s *Server) cancelAcquisition(w http.ResponseWriter, r *http.Request) {
+	if !s.acquisitions.Cancel(r.PathValue("id")) {
+		s.writeError(w, r, &model.ProviderError{Code: "acquisition_not_found", Message: "acquisition was not found", Status: http.StatusNotFound})
+		return
+	}
+	job, _ := s.acquisitions.Get(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, job)
+}
+func (s *Server) acquisitionFile(w http.ResponseWriter, r *http.Request) {
+	f, ok := s.acquisitions.File(r.PathValue("id"))
+	if !ok {
+		s.writeError(w, r, &model.ProviderError{Code: "file_not_ready", Message: "acquisition file is not ready", Status: http.StatusConflict, Retryable: true})
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = io.Copy(w, f)
 }
 
 func (s *Server) requestContext(next http.Handler) http.Handler {

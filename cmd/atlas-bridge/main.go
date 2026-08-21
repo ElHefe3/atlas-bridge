@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElHefe3/atlas-bridge/internal/api"
 	"github.com/ElHefe3/atlas-bridge/internal/cache"
+	"github.com/ElHefe3/atlas-bridge/internal/catalog"
 	"github.com/ElHefe3/atlas-bridge/internal/config"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
 	"github.com/ElHefe3/atlas-bridge/internal/providers"
@@ -41,6 +42,26 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	catalogue, err := catalog.Open(cfg.DataPath + ".catalogue.sqlite")
+	if err != nil {
+		logger.Error("catalogue failed", "error", err)
+		os.Exit(1)
+	}
+	defer catalogue.Close()
+	if cfg.CatalogueJSONL != "" {
+		input, openErr := os.Open(cfg.CatalogueJSONL)
+		if openErr != nil {
+			logger.Error("catalogue ingest failed", "error", openErr)
+			os.Exit(1)
+		}
+		count, ingestErr := catalogue.IngestJSONL(context.Background(), input, 0)
+		input.Close()
+		if ingestErr != nil {
+			logger.Error("catalogue ingest failed", "records", count, "error", ingestErr)
+			os.Exit(1)
+		}
+		logger.Info("catalogue ingested", "records", count)
+	}
 	annaHTTP, err := safehttp.New(cfg.AnnaOrigins, cfg.RequestTimeout, cfg.DownloadLimit)
 	if err != nil {
 		logger.Error("Anna HTTP policy failed", "error", err)
@@ -52,7 +73,7 @@ func main() {
 		os.Exit(1)
 	}
 	registered := []model.Provider{providers.NewAnna(annaHTTP, store, cfg.AnnaMirrors, cfg.AnnaKey), providers.NewLibGen(libgenHTTP, store, cfg.LibGenMirrors)}
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: api.New(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger).Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
+	server := &http.Server{Addr: cfg.ListenAddress, Handler: api.NewWithCatalogueAndProviders(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger, catalogue, cfg.DataPath+"-staging", cfg.DownloadLimit).Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
 	go func() {
 		logger.Info("Atlas Bridge listening", "address", cfg.ListenAddress)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -1,0 +1,103 @@
+package torrent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+// Transmission is the narrow RPC boundary used by Bridge acquisition workers.
+// It is deliberately independent of provider manifests and never accepts an
+// arbitrary magnet from an HTTP caller without a validated acquisition job.
+type Transmission struct {
+	endpoint string
+	client   *http.Client
+}
+
+type AddRequest struct {
+	Metainfo    string `json:"metainfo"`
+	DownloadDir string `json:"download-dir"`
+	FilesWanted []int  `json:"files-wanted,omitempty"`
+}
+type AddResponse struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Hash string `json:"hashString"`
+}
+type Status struct {
+	ID             int     `json:"id"`
+	Status         int     `json:"status"`
+	PercentDone    float64 `json:"percentDone"`
+	TotalSize      int64   `json:"totalSize"`
+	DownloadedEver int64   `json:"downloadedEver"`
+	Error          string  `json:"errorString"`
+}
+
+func NewTransmission(endpoint string) *Transmission {
+	return &Transmission{endpoint: endpoint, client: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func (t *Transmission) call(ctx context.Context, method string, args any, out any) error {
+	body, err := json.Marshal(map[string]any{"method": method, "arguments": args})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("transmission session id required")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("transmission returned HTTP %s", resp.Status)
+	}
+	var envelope struct {
+		Result    string          `json:"result"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return err
+	}
+	if envelope.Result != "success" {
+		return fmt.Errorf("transmission RPC failed: %s", envelope.Result)
+	}
+	if out != nil && len(envelope.Arguments) > 0 {
+		return json.Unmarshal(envelope.Arguments, out)
+	}
+	return nil
+}
+
+func (t *Transmission) Add(ctx context.Context, req AddRequest) (AddResponse, error) {
+	var out struct {
+		TorrentAdd AddResponse `json:"torrent-added"`
+	}
+	err := t.call(ctx, "torrent-add", req, &out)
+	return out.TorrentAdd, err
+}
+func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
+	var out struct {
+		Torrents []Status `json:"torrents"`
+	}
+	err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"id", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
+	if err != nil {
+		return Status{}, err
+	}
+	if len(out.Torrents) == 0 {
+		return Status{}, fmt.Errorf("torrent %s not found", strconv.Itoa(id))
+	}
+	return out.Torrents[0], nil
+}
+func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) error {
+	return t.call(ctx, "torrent-remove", map[string]any{"ids": []int{id}, "delete-local-data": deleteData}, nil)
+}

@@ -22,6 +22,7 @@ type Config struct {
 	MetadataLimit  int64
 	DownloadLimit  int64
 	RequestTimeout time.Duration
+	CatalogueJSONL string
 }
 
 func Load() (Config, error) {
@@ -34,6 +35,7 @@ func Load() (Config, error) {
 		MetadataLimit:  intEnv("ATLAS_BRIDGE_METADATA_LIMIT", 10<<20),
 		DownloadLimit:  intEnv("ATLAS_BRIDGE_DOWNLOAD_LIMIT", 512<<20),
 		RequestTimeout: durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
+		CatalogueJSONL: env("ATLAS_BRIDGE_CATALOGUE_JSONL", ""),
 	}
 	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
 	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc"))

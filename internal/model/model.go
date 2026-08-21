@@ -44,6 +44,36 @@ type File struct {
 	URL    string `json:"url"`
 }
 
+// Acquisition is the normalized lifecycle exposed to Atlas. Source-specific
+// locators never cross this boundary.
+type Acquisition struct {
+	ID         string  `json:"id"`
+	ProviderID string  `json:"providerId"`
+	ExternalID string  `json:"externalId"`
+	FileID     string  `json:"fileId"`
+	Format     string  `json:"format"`
+	Status     string  `json:"status"`
+	Progress   float64 `json:"progress"`
+	Bytes      int64   `json:"bytesDownloaded"`
+	TotalBytes *int64  `json:"totalBytes,omitempty"`
+	Error      string  `json:"error,omitempty"`
+}
+
+type AcquisitionRequest struct {
+	ProviderID string `json:"providerId"`
+	ExternalID string `json:"externalId"`
+	FileID     string `json:"fileId"`
+}
+
+const (
+	AcquisitionQueued      = "queued"
+	AcquisitionResolving   = "resolving"
+	AcquisitionDownloading = "downloading"
+	AcquisitionCompleted   = "completed"
+	AcquisitionFailed      = "failed"
+	AcquisitionCancelled   = "cancelled"
+)
+
 type RemoteFile struct {
 	URL         string
 	ContentType string
