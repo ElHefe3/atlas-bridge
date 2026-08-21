@@ -51,6 +51,16 @@ go vet ./...
 go build ./cmd/atlas-bridge
 ```
 
+To inspect a torrent descriptor without downloading any payload, build and run:
+
+```sh
+go run ./cmd/catalogue-inspect ./metadata.torrent
+```
+
+The command prints the infohash, total size, and every contained path. It is
+the required reconnaissance step before configuring a metadata torrent; a
+`.torrent` descriptor is never treated as a searchable catalogue by itself.
+
 For local startup, create secret files and point the service at them:
 
 ```sh
