@@ -9,12 +9,15 @@ import (
 	"strings"
 
 	"github.com/ElHefe3/atlas-bridge/internal/model"
-	"github.com/ElHefe3/atlas-bridge/internal/safehttp"
 )
 
 const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 
-func request(ctx context.Context, client *safehttp.Client, target, accept string) (*http.Response, error) {
+type requestClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+func request(ctx context.Context, client requestClient, target, accept string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err

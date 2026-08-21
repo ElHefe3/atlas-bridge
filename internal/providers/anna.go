@@ -24,7 +24,7 @@ var annaMD5 = regexp.MustCompile(`(?i)/md5/([a-f0-9]{32})`)
 var sizePattern = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB)`)
 
 type Anna struct {
-	client         *safehttp.Client
+	client         requestClient
 	cache          *cache.Store
 	mirrors        []string
 	key            string
@@ -47,6 +47,7 @@ func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOption
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var last error
+	var challengeErr error
 	for _, mirror := range a.mirrors {
 		target := strings.TrimRight(mirror, "/") + "/search?q=" + url.QueryEscape(query) + "&page=" + strconv.Itoa(opts.Page)
 		resp, err := request(ctx, a.client, target, "text/html,application/xhtml+xml")
@@ -61,14 +62,14 @@ func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOption
 			continue
 		}
 		if isChallenge(data) {
-			a.markChallenge(time.Now().Add(15 * time.Minute))
-			return model.SearchResponse{}, unavailable("anna", "upstream_challenge", "Anna's Archive requires browser verification on this mirror", true)
+			challengeErr = unavailable("anna", "upstream_challenge", "Anna's Archive requires browser verification on all reachable mirrors", true)
+			continue
 		}
 		if err = requireOK("anna", resp); err != nil {
 			last = err
 			continue
 		}
-		books, err := a.parseSearch(data, opts.Format)
+		books, err := a.parseSearch(data, opts.Format, mirror)
 		if err != nil {
 			last = err
 			continue
@@ -78,6 +79,10 @@ func (a *Anna) Search(ctx context.Context, query string, opts model.SearchOption
 		}
 		a.clearChallenge()
 		return model.SearchResponse{ProviderID: "anna", Query: query, Page: opts.Page, HasMore: len(books) >= opts.PageSize, Results: books}, nil
+	}
+	if challengeErr != nil {
+		a.markChallenge(time.Now().Add(15 * time.Minute))
+		return model.SearchResponse{}, challengeErr
 	}
 	if last == nil {
 		last = unavailable("anna", "upstream_unavailable", "no Anna's Archive mirror is configured", true)
@@ -108,7 +113,7 @@ func isChallenge(data []byte) bool {
 	return strings.Contains(lower, "ddos-guard") || strings.Contains(lower, "checking your browser") || strings.Contains(lower, "browser verification")
 }
 
-func (a *Anna) parseSearch(data []byte, wantedFormat string) ([]model.Book, error) {
+func (a *Anna) parseSearch(data []byte, wantedFormat, mirror string) ([]model.Book, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -147,7 +152,7 @@ func (a *Anna) parseSearch(data []byte, wantedFormat string) ([]model.Book, erro
 		cover, _ := container.Find("img").First().Attr("src")
 		id := strings.ToLower(match[1])
 		seen[id] = true
-		book := model.Book{ProviderID: "anna", ExternalID: id, Title: title, Author: author, CoverURL: absoluteURL(a.mirrors[0], cover), Files: []model.File{}}
+		book := model.Book{ProviderID: "anna", ExternalID: id, Title: title, Author: author, CoverURL: absoluteURL(mirror, cover), Files: []model.File{}}
 		if format != "" {
 			book.Files = append(book.Files, model.File{FileID: "0-" + format, Format: format, Size: parseSize(text)})
 		}
