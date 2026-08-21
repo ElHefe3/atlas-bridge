@@ -36,7 +36,7 @@ func Load() (Config, error) {
 		RequestTimeout: durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
 	}
 	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
-	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org"))
+	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc"))
 	var err error
 	c.BridgeToken, err = secret("ATLAS_BRIDGE_TOKEN_FILE", "/run/secrets/bridge-token", true)
 	if err != nil {

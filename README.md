@@ -31,7 +31,7 @@ Secrets are read from files rather than environment values:
 | `ATLAS_ANNA_MIRRORS` | Current `.gd,.gl,.pk` mirrors | Ordered search and API mirrors |
 | `ATLAS_ANNA_EXTRA_ORIGINS` | `https://download.booksdl.org` | Exact additional cover/download origins |
 | `ATLAS_LIBGEN_MIRRORS` | Current `.gl,.bz,.la,.vg` LibGen+ mirrors | Ordered search mirrors |
-| `ATLAS_LIBGEN_EXTRA_ORIGINS` | `https://library.lol,https://download.booksdl.org` | Exact detail/download origins |
+| `ATLAS_LIBGEN_EXTRA_ORIGINS` | Known Library Genesis download/CDN origins | Exact detail/download origins |
 | `ATLAS_BRIDGE_DOWNLOAD_LIMIT` | 512 MiB | Maximum proxied response size |
 | `ATLAS_BRIDGE_REQUEST_TIMEOUT` | 45 seconds | Complete upstream request timeout |
 

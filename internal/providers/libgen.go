@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -96,8 +97,11 @@ func (l *LibGen) parseSearch(data []byte, mirror, wantedFormat string) ([]model.
 		if id == "" || seen[id] {
 			return
 		}
-		title := strings.TrimSpace(cells.Eq(2).Text())
+		title := strings.TrimSpace(cells.Eq(0).Find(`a[href*="edition.php"]`).First().Text())
 		author := strings.TrimSpace(cells.Eq(1).Text())
+		if title == "" {
+			title = strings.TrimSpace(cells.Eq(2).Text())
+		}
 		if title == "" {
 			title = strings.TrimSpace(row.Find("a[title],a[href]").First().Text())
 		}
@@ -159,9 +163,11 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 		return nil, err
 	}
 	var detail string
+	var format string
 	for _, file := range book.Files {
 		if file.FileID == fileID {
 			detail = file.URL
+			format = file.Format
 			break
 		}
 	}
@@ -184,16 +190,7 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 	if err != nil {
 		return nil, err
 	}
-	var download string
-	doc.Find("a[href]").EachWithBreak(func(_ int, a *goquery.Selection) bool {
-		href, _ := a.Attr("href")
-		label := strings.ToLower(strings.TrimSpace(a.Text()))
-		if label == "get" || strings.Contains(label, "download") || strings.HasSuffix(strings.ToLower(strings.Split(href, "?")[0]), "."+book.Files[0].Format) {
-			download = absoluteURL(detail, href)
-			return false
-		}
-		return true
-	})
+	download := resolveLibGenDownload(doc, detail, format)
 	if download == "" {
 		return nil, unavailable("libgen", "download_resolution_failed", "LibGen download link was not found", false)
 	}
@@ -205,7 +202,49 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 		fileResp.Body.Close()
 		return nil, err
 	}
+	reader := bufio.NewReader(fileResp.Body)
+	signature, peekErr := reader.Peek(5)
+	if peekErr != nil || format == "pdf" && !bytes.Equal(signature, []byte("%PDF-")) ||
+		format == "epub" && !bytes.HasPrefix(signature, []byte{'P', 'K', 3, 4}) {
+		fileResp.Body.Close()
+		return nil, &model.ProviderError{Code: "invalid_upstream_file", Message: "LibGen did not return the requested book file", Provider: "libgen", Retryable: true, Status: http.StatusBadGateway}
+	}
+	fileResp.Body = &readerReadCloser{Reader: reader, Closer: fileResp.Body}
 	return remote(fileResp), nil
 }
+
+func resolveLibGenDownload(doc *goquery.Document, detail, format string) string {
+	var directDownload string
+	var labelledDownload string
+	doc.Find("a[href]").EachWithBreak(func(_ int, a *goquery.Selection) bool {
+		href, _ := a.Attr("href")
+		href = strings.TrimSpace(href)
+		if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(strings.ToLower(href), "javascript:") {
+			return true
+		}
+		label := strings.ToLower(strings.TrimSpace(a.Text()))
+		path := strings.ToLower(strings.Split(href, "?")[0])
+		if strings.Contains(path, "get.php") || strings.HasSuffix(path, "."+format) {
+			directDownload = absoluteURL(detail, href)
+			return false
+		}
+		if labelledDownload == "" && (label == "get" || strings.Contains(label, "download")) {
+			labelledDownload = absoluteURL(detail, href)
+		}
+		return true
+	})
+	download := directDownload
+	if download == "" {
+		download = labelledDownload
+	}
+	return download
+}
+
+type readerReadCloser struct {
+	*bufio.Reader
+	Closer interface{ Close() error }
+}
+
+func (r *readerReadCloser) Close() error { return r.Closer.Close() }
 
 var _ = fmt.Sprintf
