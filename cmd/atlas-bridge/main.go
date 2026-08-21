@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +52,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer catalogue.Close()
+	if cfg.CatalogueTorrent != "" {
+		if cfg.CatalogueZstd == "" || cfg.CatalogueTorrentPath == "" {
+			logger.Error("catalogue torrent requires ATLAS_BRIDGE_CATALOGUE_ZSTD and ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH")
+		} else if err := retrieveCatalogueTorrent(context.Background(), cfg, logger); err != nil {
+			logger.Error("catalogue torrent retrieval failed", "error", err)
+		} else {
+			logger.Info("catalogue torrent retrieved", "path", cfg.CatalogueZstd)
+		}
+	}
 	if cfg.CatalogueJSONL != "" {
 		input, openErr := os.Open(cfg.CatalogueJSONL)
 		if openErr != nil {
@@ -100,4 +112,50 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown failed", "error", err)
 	}
+}
+
+func retrieveCatalogueTorrent(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	rel := filepath.Clean(filepath.FromSlash(cfg.CatalogueTorrentPath))
+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("catalogue torrent path must be relative and contained")
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.CatalogueZstd), 0o700); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(cfg.CatalogueZstd), ".catalogue-torrent-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	client := torrent.NewTransmission(cfg.TransmissionRPC)
+	f, size, err := client.DownloadFile(ctx, torrent.AddRequest{Metainfo: cfg.CatalogueTorrent, DownloadDir: dir}, filepath.Join(dir, rel), cfg.CataloguePayloadLimit)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	tmp := cfg.CatalogueZstd + ".part"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, f)
+	syncErr := out.Sync()
+	closeErr := out.Close()
+	if copyErr != nil || syncErr != nil || closeErr != nil {
+		_ = os.Remove(tmp)
+		if copyErr != nil {
+			return copyErr
+		}
+		return fmt.Errorf("catalogue staging failed")
+	}
+	if size <= 0 {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("catalogue torrent returned an empty file")
+	}
+	if err := os.Rename(tmp, cfg.CatalogueZstd); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	logger.Info("catalogue payload staged", "bytes", size)
+	return nil
 }

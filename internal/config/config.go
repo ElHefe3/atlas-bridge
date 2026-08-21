@@ -10,38 +10,44 @@ import (
 )
 
 type Config struct {
-	ListenAddress        string
-	PublicBaseURL        string
-	DataPath             string
-	BridgeToken          string
-	AnnaKey              string
-	AnnaMirrors          []string
-	AnnaOrigins          []string
-	LibGenMirrors        []string
-	LibGenOrigins        []string
-	MetadataLimit        int64
-	DownloadLimit        int64
-	RequestTimeout       time.Duration
-	CatalogueJSONL       string
-	CatalogueZstd        string
-	CatalogueMaxExpanded int64
-	TransmissionRPC      string
+	ListenAddress         string
+	PublicBaseURL         string
+	DataPath              string
+	BridgeToken           string
+	AnnaKey               string
+	AnnaMirrors           []string
+	AnnaOrigins           []string
+	LibGenMirrors         []string
+	LibGenOrigins         []string
+	MetadataLimit         int64
+	DownloadLimit         int64
+	RequestTimeout        time.Duration
+	CatalogueJSONL        string
+	CatalogueZstd         string
+	CatalogueTorrent      string
+	CatalogueTorrentPath  string
+	CatalogueMaxExpanded  int64
+	CataloguePayloadLimit int64
+	TransmissionRPC       string
 }
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddress:        env("ATLAS_BRIDGE_LISTEN", ":8080"),
-		PublicBaseURL:        strings.TrimRight(env("ATLAS_BRIDGE_PUBLIC_BASE_URL", "http://atlas-bridge:8080"), "/"),
-		DataPath:             env("ATLAS_BRIDGE_DATA", "/data/cache.db"),
-		AnnaMirrors:          list("ATLAS_ANNA_MIRRORS", "https://annas-archive.gd,https://annas-archive.gl,https://annas-archive.pk"),
-		LibGenMirrors:        list("ATLAS_LIBGEN_MIRRORS", "https://libgen.gl,https://libgen.bz,https://libgen.la,https://libgen.vg"),
-		MetadataLimit:        intEnv("ATLAS_BRIDGE_METADATA_LIMIT", 10<<20),
-		DownloadLimit:        intEnv("ATLAS_BRIDGE_DOWNLOAD_LIMIT", 512<<20),
-		RequestTimeout:       durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
-		CatalogueJSONL:       env("ATLAS_BRIDGE_CATALOGUE_JSONL", ""),
-		CatalogueZstd:        env("ATLAS_BRIDGE_CATALOGUE_ZSTD", ""),
-		CatalogueMaxExpanded: intEnv("ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED", 50<<30),
-		TransmissionRPC:      env("ATLAS_TRANSMISSION_RPC", "http://transmission:9091/transmission/rpc"),
+		ListenAddress:         env("ATLAS_BRIDGE_LISTEN", ":8080"),
+		PublicBaseURL:         strings.TrimRight(env("ATLAS_BRIDGE_PUBLIC_BASE_URL", "http://atlas-bridge:8080"), "/"),
+		DataPath:              env("ATLAS_BRIDGE_DATA", "/data/cache.db"),
+		AnnaMirrors:           list("ATLAS_ANNA_MIRRORS", "https://annas-archive.gd,https://annas-archive.gl,https://annas-archive.pk"),
+		LibGenMirrors:         list("ATLAS_LIBGEN_MIRRORS", "https://libgen.gl,https://libgen.bz,https://libgen.la,https://libgen.vg"),
+		MetadataLimit:         intEnv("ATLAS_BRIDGE_METADATA_LIMIT", 10<<20),
+		DownloadLimit:         intEnv("ATLAS_BRIDGE_DOWNLOAD_LIMIT", 512<<20),
+		RequestTimeout:        durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
+		CatalogueJSONL:        env("ATLAS_BRIDGE_CATALOGUE_JSONL", ""),
+		CatalogueZstd:         env("ATLAS_BRIDGE_CATALOGUE_ZSTD", ""),
+		CatalogueTorrent:      env("ATLAS_BRIDGE_CATALOGUE_TORRENT", ""),
+		CatalogueTorrentPath:  env("ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH", ""),
+		CatalogueMaxExpanded:  intEnv("ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED", 50<<30),
+		CataloguePayloadLimit: intEnv("ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT", 4<<30),
+		TransmissionRPC:       env("ATLAS_TRANSMISSION_RPC", "http://transmission:9091/transmission/rpc"),
 	}
 	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
 	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc"))
