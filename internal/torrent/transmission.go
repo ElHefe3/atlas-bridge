@@ -101,9 +101,16 @@ func (t *Transmission) Add(ctx context.Context, req AddRequest) (AddResponse, er
 		req.Metainfo = ""
 	}
 	var out struct {
-		TorrentAdd AddResponse `json:"torrent-added"`
+		TorrentAdd       AddResponse `json:"torrent-added"`
+		TorrentDuplicate AddResponse `json:"torrent-duplicate"`
 	}
 	err := t.call(ctx, "torrent-add", req, &out)
+	if out.TorrentAdd.ID == 0 && out.TorrentDuplicate.ID != 0 {
+		out.TorrentAdd = out.TorrentDuplicate
+	}
+	if err == nil && out.TorrentAdd.ID == 0 {
+		err = fmt.Errorf("transmission returned no torrent id")
+	}
 	return out.TorrentAdd, err
 }
 func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
