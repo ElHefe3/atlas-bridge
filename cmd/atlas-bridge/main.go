@@ -62,7 +62,7 @@ func main() {
 		logger.Error("LibGen HTTP policy failed", "error", err)
 		os.Exit(1)
 	}
-	registered := []model.Provider{providers.NewAnna(annaHTTP, store, cfg.AnnaMirrors, cfg.AnnaKey), providers.NewLibGen(libgenHTTP, store, cfg.LibGenMirrors)}
+	registered := []model.Provider{providers.LocalCatalogue{Store: catalogue}, providers.NewAnna(annaHTTP, store, cfg.AnnaMirrors, cfg.AnnaKey), providers.NewLibGen(libgenHTTP, store, cfg.LibGenMirrors)}
 	serverAPI := api.NewWithCatalogueAndProviders(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger, catalogue, cfg.DataPath+"-staging", cfg.DownloadLimit)
 	server := &http.Server{Addr: cfg.ListenAddress, Handler: serverAPI.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
 	serverAPI.ConfigureTorrentSources(catalogue, torrent.NewTransmission(cfg.TransmissionRPC))

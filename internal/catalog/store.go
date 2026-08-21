@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -117,6 +118,29 @@ func (s *Store) Search(ctx context.Context, query string, page, pageSize int, fo
 		return nil, false, err
 	}
 	return out, len(out) == pageSize, nil
+}
+
+func (s *Store) GetBook(ctx context.Context, provider, external string) (model.Book, bool, error) {
+	var b model.Book
+	var files string
+	err := s.db.QueryRowContext(ctx, `SELECT provider_id,external_id,title,author,description,isbn,cover_url,files_json FROM books WHERE provider_id=? AND external_id=?`, provider, external).Scan(&b.ProviderID, &b.ExternalID, &b.Title, &b.Author, &b.Description, &b.ISBN, &b.CoverURL, &files)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Book{}, false, nil
+	}
+	if err != nil {
+		return model.Book{}, false, err
+	}
+	if err := json.Unmarshal([]byte(files), &b.Files); err != nil {
+		return model.Book{}, false, err
+	}
+	merged, err := s.fileRecords(ctx, provider, external)
+	if err != nil {
+		return model.Book{}, false, err
+	}
+	if len(merged) > 0 {
+		b.Files = merged
+	}
+	return b, true, nil
 }
 
 func (s *Store) fileRecords(ctx context.Context, provider, external string) ([]model.File, error) {
