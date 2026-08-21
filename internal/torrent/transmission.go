@@ -48,14 +48,27 @@ func (t *Transmission) call(ctx context.Context, method string, args any, out an
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if attempt == 1 && resp != nil {
+			req.Header.Set("X-Transmission-Session-Id", resp.Header.Get("X-Transmission-Session-Id"))
+		}
+		resp, err = t.client.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusConflict {
+			break
+		}
+		_ = resp.Body.Close()
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return err
+	if resp == nil {
+		return fmt.Errorf("transmission returned no response")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusConflict {
