@@ -13,6 +13,16 @@ Volume=/home/kreef/atlas-bridge/data:/data:Z
 Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
 Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/rpc
+# Bounded metadata-first catalogue sync. These are metadata payloads only;
+# content torrents remain selected per acquisition.
+Environment=ATLAS_BRIDGE_CATALOGUE_TORRENT=https://annas-archive.pk/dyn/small_file/torrents/managed_by_aa/annas_archive_meta__aacid/annas_archive_meta__aacid__zlib3_records__20240809T171652Z--20260706T193143Z.jsonl.seekable.zst.torrent
+Environment=ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH=annas_archive_meta__aacid__zlib3_records__20240809T171652Z--20260706T193143Z.jsonl.seekable.zst
+Environment=ATLAS_BRIDGE_CATALOGUE_ZSTD=/data/zlib3-records.jsonl.zst
+Environment=ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT=https://annas-archive.pk/dyn/small_file/torrents/managed_by_aa/annas_archive_meta__aacid/annas_archive_meta__aacid__zlib3_files__20230808T051503Z--20260706T185134Z.jsonl.seekable.zst.torrent
+Environment=ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH=annas_archive_meta__aacid__zlib3_files__20230808T051503Z--20260706T185134Z.jsonl.seekable.zst
+Environment=ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD=/data/zlib3-files.jsonl.zst
+Environment=ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT=32212254720
+Environment=ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED=128849018880
 # Set ATLAS_BRIDGE_CATALOGUE_ZSTD to a mounted lawful/public-domain fixture
 # when enabling local metadata ingestion; content torrents are never indexed.
 HealthCmd=/usr/local/bin/atlas-bridge healthcheck

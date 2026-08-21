@@ -32,6 +32,9 @@ Secrets are read from files rather than environment values:
 | `ATLAS_BRIDGE_CATALOGUE_ZSTD` | empty | Optional `.jsonl.zst`/seekable-zstd catalogue to stream-ingest at startup |
 | `ATLAS_BRIDGE_CATALOGUE_TORRENT` | empty | Optional administrator-configured torrent URL/magnet for the metadata payload |
 | `ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH` | empty | Relative path of the selected `.jsonl.zst` file inside that torrent |
+| `ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT` | empty | Optional zlib3_files metadata torrent descriptor/magnet |
+| `ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH` | empty | Relative `.jsonl.zst` path inside the zlib3_files torrent |
+| `ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD` | empty | Destination path for the file-level metadata payload |
 | `ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT` | 4 GiB | Maximum compressed metadata payload staged from Transmission |
 | `ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED` | 50 GiB | Hard expanded-size ceiling for compressed metadata ingestion |
 | `ATLAS_ANNA_MIRRORS` | Current `.gd,.gl,.pk` mirrors | Ordered search and API mirrors |

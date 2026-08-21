@@ -61,6 +61,19 @@ func main() {
 			logger.Info("catalogue torrent retrieved", "path", cfg.CatalogueZstd)
 		}
 	}
+	if cfg.CatalogueFilesTorrent != "" {
+		filesCfg := cfg
+		filesCfg.CatalogueTorrent = cfg.CatalogueFilesTorrent
+		filesCfg.CatalogueTorrentPath = cfg.CatalogueFilesTorrentPath
+		filesCfg.CatalogueZstd = cfg.CatalogueFilesZstd
+		if cfg.CatalogueFilesZstd == "" || cfg.CatalogueFilesTorrentPath == "" {
+			logger.Error("file catalogue torrent requires ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD and ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH")
+		} else if err := retrieveCatalogueTorrent(context.Background(), filesCfg, logger); err != nil {
+			logger.Error("file catalogue torrent retrieval failed", "error", err)
+		} else {
+			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
+		}
+	}
 	if cfg.CatalogueJSONL != "" {
 		input, openErr := os.Open(cfg.CatalogueJSONL)
 		if openErr != nil {
