@@ -51,6 +51,15 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	count, skipped := 0, 0
+	batch := make([]FileRecord, 0, 1000)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := s.UpsertFilesBatch(ctx, batch)
+		batch = batch[:0]
+		return err
+	}
 	for scanner.Scan() {
 		if limit > 0 && count >= limit {
 			break
@@ -76,15 +85,20 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 			skipped++
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO file_records(provider_id,external_id,file_id,md5,aacid,format,size) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,format=excluded.format,size=excluded.size`, provider, r.ExternalID, fileID, nullable(r.MD5), nullable(r.AACID), fileID, r.Size); err != nil {
-			return count, skipped, err
-		}
+		var locator *Locator
 		if r.Torrent != "" && r.Path != "" {
-			if err := s.PutLocator(ctx, Locator{ProviderID: provider, ExternalID: r.ExternalID, FileID: fileID, Kind: LocatorTorrentFile, Metainfo: r.Torrent, Path: r.Path}); err != nil {
+			locator = &Locator{ProviderID: provider, ExternalID: r.ExternalID, FileID: fileID, Kind: LocatorTorrentFile, Metainfo: r.Torrent, Path: r.Path}
+		}
+		batch = append(batch, FileRecord{ProviderID: provider, ExternalID: r.ExternalID, FileID: fileID, MD5: r.MD5, AACID: r.AACID, Format: fileID, Size: r.Size, Locator: locator})
+		count++
+		if len(batch) >= 1000 {
+			if err := flush(); err != nil {
 				return count, skipped, err
 			}
 		}
-		count++
+	}
+	if err := flush(); err != nil {
+		return count, skipped, err
 	}
 	return count, skipped, scanner.Err()
 }
@@ -139,6 +153,15 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	records, skipped := 0, 0
+	batch := make([]model.Book, 0, 500)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := s.UpsertBatch(ctx, batch)
+		batch = batch[:0]
+		return err
+	}
 	for scanner.Scan() {
 		if limit > 0 && records >= limit {
 			break
@@ -181,10 +204,21 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 		} else if r.Torrent != "" && r.Path != "" {
 			locator = &Locator{ProviderID: provider, ExternalID: r.ExternalID, FileID: format, Kind: LocatorTorrentFile, Metainfo: r.Torrent, Path: r.Path}
 		}
-		if err := s.ImportRecord(ctx, book, locator); err != nil {
-			return records, skipped, err
+		batch = append(batch, book)
+		if locator != nil {
+			if err := s.PutLocator(ctx, *locator); err != nil {
+				return records, skipped, err
+			}
 		}
 		records++
+		if len(batch) >= 500 {
+			if err := flush(); err != nil {
+				return records, skipped, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return records, skipped, err
 	}
 	return records, skipped, scanner.Err()
 }

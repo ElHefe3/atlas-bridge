@@ -171,12 +171,16 @@ func (m *Manager) runTorrent(id string, req model.AcquisitionRequest, locator ca
 	if filepath.IsAbs(locator.Path) || strings.Contains(filepath.ToSlash(locator.Path), "../") {
 		return fmt.Errorf("unsafe torrent path")
 	}
-	dir := filepath.Join(m.staging, id+"-torrent")
+	sharedRoot := filepath.Join(filepath.Dir(m.staging), "torrents")
+	if err := os.MkdirAll(sharedRoot, 0o700); err != nil {
+		return err
+	}
+	dir := filepath.Join(sharedRoot, id+"-torrent")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	file, size, err := m.transmission.DownloadFile(context.Background(), torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: dir}, filepath.Join(dir, locator.Path), m.maxBytes)
+	file, size, err := m.transmission.DownloadFile(context.Background(), torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: filepath.Join("/downloads", id+"-torrent")}, filepath.Join(dir, locator.Path), m.maxBytes)
 	if err != nil {
 		return err
 	}
