@@ -86,22 +86,30 @@ func main() {
 
 func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logger *slog.Logger) {
 	ctx := context.Background()
+	if cfg.CatalogueFilesTorrent != "" && cfg.CatalogueFilesZstd != "" && cfg.CatalogueFilesTorrentPath != "" {
+		go func() {
+			filesCfg := cfg
+			filesCfg.CatalogueTorrent = cfg.CatalogueFilesTorrent
+			filesCfg.CatalogueTorrentPath = cfg.CatalogueFilesTorrentPath
+			filesCfg.CatalogueZstd = cfg.CatalogueFilesZstd
+			if err := retrieveCatalogueTorrent(ctx, filesCfg, logger); err != nil {
+				logger.Error("file catalogue torrent retrieval failed", "error", err)
+				return
+			}
+			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
+			count, skipped, err := catalogue.IngestZstdFilesJSONL(ctx, cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
+			if err != nil {
+				logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
+			} else {
+				logger.Info("compressed file catalogue ingested", "records", count, "skipped", skipped)
+			}
+		}()
+	}
 	if cfg.CatalogueTorrent != "" && cfg.CatalogueZstd != "" && cfg.CatalogueTorrentPath != "" {
 		if err := retrieveCatalogueTorrent(ctx, cfg, logger); err != nil {
 			logger.Error("catalogue torrent retrieval failed", "error", err)
 		} else {
 			logger.Info("catalogue torrent retrieved", "path", cfg.CatalogueZstd)
-		}
-	}
-	if cfg.CatalogueFilesTorrent != "" && cfg.CatalogueFilesZstd != "" && cfg.CatalogueFilesTorrentPath != "" {
-		filesCfg := cfg
-		filesCfg.CatalogueTorrent = cfg.CatalogueFilesTorrent
-		filesCfg.CatalogueTorrentPath = cfg.CatalogueFilesTorrentPath
-		filesCfg.CatalogueZstd = cfg.CatalogueFilesZstd
-		if err := retrieveCatalogueTorrent(ctx, filesCfg, logger); err != nil {
-			logger.Error("file catalogue torrent retrieval failed", "error", err)
-		} else {
-			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
 		}
 	}
 	if cfg.CatalogueJSONL != "" {
@@ -123,14 +131,6 @@ func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logge
 			logger.Error("compressed catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
 		} else {
 			logger.Info("compressed catalogue ingested", "records", count, "skipped", skipped)
-		}
-	}
-	if cfg.CatalogueFilesZstd != "" {
-		count, skipped, err := catalogue.IngestZstdFilesJSONL(ctx, cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
-		if err != nil {
-			logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
-		} else {
-			logger.Info("compressed file catalogue ingested", "records", count, "skipped", skipped)
 		}
 	}
 }
