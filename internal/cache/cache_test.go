@@ -9,7 +9,7 @@ import (
 )
 
 func TestStoreRoundTripAndExpiry(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "cache.db"), 20*time.Millisecond)
+	store, err := Open(filepath.Join(t.TempDir(), "cache.db"), 250*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestStoreRoundTripAndExpiry(t *testing.T) {
 	if err != nil || !ok || got.Title != book.Title {
 		t.Fatalf("unexpected cache result: %#v, %v, %v", got, ok, err)
 	}
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(350 * time.Millisecond)
 	_, ok, err = store.Get("test", "1")
 	if err != nil || ok {
 		t.Fatalf("expired entry remained: ok=%v err=%v", ok, err)
