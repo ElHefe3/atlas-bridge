@@ -24,6 +24,7 @@ type Config struct {
 	RequestTimeout        time.Duration
 	CatalogueJSONL        string
 	CatalogueZstd         string
+	CatalogueFilesZstd    string
 	CatalogueTorrent      string
 	CatalogueTorrentPath  string
 	CatalogueMaxExpanded  int64
@@ -43,6 +44,7 @@ func Load() (Config, error) {
 		RequestTimeout:        durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
 		CatalogueJSONL:        env("ATLAS_BRIDGE_CATALOGUE_JSONL", ""),
 		CatalogueZstd:         env("ATLAS_BRIDGE_CATALOGUE_ZSTD", ""),
+		CatalogueFilesZstd:    env("ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD", ""),
 		CatalogueTorrent:      env("ATLAS_BRIDGE_CATALOGUE_TORRENT", ""),
 		CatalogueTorrentPath:  env("ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH", ""),
 		CatalogueMaxExpanded:  intEnv("ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED", 50<<30),

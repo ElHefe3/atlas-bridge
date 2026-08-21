@@ -83,6 +83,14 @@ func main() {
 			logger.Info("compressed catalogue ingested", "records", count, "skipped", skipped)
 		}
 	}
+	if cfg.CatalogueFilesZstd != "" {
+		count, skipped, ingestErr := catalogue.IngestZstdFilesJSONL(context.Background(), cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
+		if ingestErr != nil {
+			logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", ingestErr)
+		} else {
+			logger.Info("compressed file catalogue ingested", "records", count, "skipped", skipped)
+		}
+	}
 	annaHTTP, err := safehttp.New(cfg.AnnaOrigins, cfg.RequestTimeout, cfg.DownloadLimit)
 	if err != nil {
 		logger.Error("Anna HTTP policy failed", "error", err)

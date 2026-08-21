@@ -33,6 +33,62 @@ type AnnaRecord struct {
 	FileSize    *int64 `json:"filesize"`
 }
 
+type AnnaFileRecord struct {
+	ProviderID string `json:"providerId"`
+	ExternalID string `json:"externalId"`
+	MD5        string `json:"md5"`
+	AACID      string `json:"aacid"`
+	Format     string `json:"format"`
+	Size       *int64 `json:"size"`
+	Torrent    string `json:"torrent"`
+	Path       string `json:"path"`
+}
+
+// SyncAnnaFilesJSONL imports file-level availability separately from
+// bibliographic records. Unknown books are retained in file_records and can
+// be joined when their catalogue record arrives later.
+func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit int) (int, int, error) {
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 64*1024), 8<<20)
+	count, skipped := 0, 0
+	for scanner.Scan() {
+		if limit > 0 && count >= limit {
+			break
+		}
+		var r AnnaFileRecord
+		if json.Unmarshal(scanner.Bytes(), &r) != nil {
+			skipped++
+			continue
+		}
+		if r.ExternalID == "" {
+			r.ExternalID = r.MD5
+		}
+		if r.ExternalID == "" || r.Format == "" {
+			skipped++
+			continue
+		}
+		provider := r.ProviderID
+		if provider == "" {
+			provider = "anna-local"
+		}
+		fileID := strings.ToLower(strings.TrimPrefix(r.Format, "."))
+		if fileID == "" {
+			skipped++
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO file_records(provider_id,external_id,file_id,md5,aacid,format,size) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,format=excluded.format,size=excluded.size`, provider, r.ExternalID, fileID, nullable(r.MD5), nullable(r.AACID), fileID, r.Size); err != nil {
+			return count, skipped, err
+		}
+		if r.Torrent != "" && r.Path != "" {
+			if err := s.PutLocator(ctx, Locator{ProviderID: provider, ExternalID: r.ExternalID, FileID: fileID, Kind: LocatorTorrentFile, Metainfo: r.Torrent, Path: r.Path}); err != nil {
+				return count, skipped, err
+			}
+		}
+		count++
+	}
+	return count, skipped, scanner.Err()
+}
+
 // SyncAnnaJSONL imports normalized Anna records without loading the dump into memory.
 // The input may be produced by a torrent client or a lawful fixture extractor.
 func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (int, int, error) {
@@ -74,7 +130,7 @@ func (s *Store) SyncAnnaJSONL(ctx context.Context, input io.Reader, limit int) (
 		if size == nil {
 			size = r.FileSize
 		}
-		book := model.Book{ProviderID: provider, ExternalID: r.ExternalID, Title: r.Title, Author: r.Author, Description: r.Description, ISBN: r.ISBN, CoverURL: r.CoverURL, Files: []model.File{{FileID: format, Format: format, Size: size}}}
+		book := model.Book{ProviderID: provider, ExternalID: r.ExternalID, Title: r.Title, Author: r.Author, Description: r.Description, ISBN: r.ISBN, CoverURL: r.CoverURL, Files: []model.File{{FileID: format, Format: format, Size: size, MD5: r.MD5, AACID: r.AACID}}}
 		var locator *Locator
 		if r.URL != "" {
 			locator = &Locator{ProviderID: provider, ExternalID: r.ExternalID, FileID: format, Kind: LocatorHTTP, URL: r.URL}
@@ -153,6 +209,16 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 // IngestZstdJSONL streams a seekable or regular zstd-compressed JSONL dump.
 // It is deliberately bounded so a bad community dataset cannot exhaust the bridge.
 func (s *Store) IngestZstdJSONL(ctx context.Context, path string, limit int, maxExpanded int64) (int, int, error) {
+	return s.ingestZstd(ctx, path, limit, maxExpanded, s.SyncAnnaJSONL)
+}
+
+func (s *Store) IngestZstdFilesJSONL(ctx context.Context, path string, limit int, maxExpanded int64) (int, int, error) {
+	return s.ingestZstd(ctx, path, limit, maxExpanded, s.SyncAnnaFilesJSONL)
+}
+
+type syncFunc func(context.Context, io.Reader, int) (int, int, error)
+
+func (s *Store) ingestZstd(ctx context.Context, path string, limit int, maxExpanded int64, syncer syncFunc) (int, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, err
@@ -167,7 +233,7 @@ func (s *Store) IngestZstdJSONL(ctx context.Context, path string, limit int, max
 	if maxExpanded > 0 {
 		input = &countingReader{r: dec, max: maxExpanded}
 	}
-	records, skipped, err := s.SyncAnnaJSONL(ctx, input, limit)
+	records, skipped, err := syncer(ctx, input, limit)
 	if err != nil {
 		return records, skipped, err
 	}
