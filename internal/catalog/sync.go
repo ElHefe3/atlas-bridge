@@ -112,6 +112,15 @@ func decodeAnnaFileRecord(data []byte) (AnnaFileRecord, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return r, err
 	}
+	for _, key := range []string{"metadata", "data", "book"} {
+		if nested, ok := raw[key].(map[string]any); ok {
+			for k, v := range nested {
+				if _, exists := raw[k]; !exists {
+					raw[k] = v
+				}
+			}
+		}
+	}
 	str := func(keys ...string) string {
 		for _, k := range keys {
 			if v, ok := raw[k].(string); ok && strings.TrimSpace(v) != "" {
@@ -237,6 +246,15 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return r, err
 	}
+	for _, key := range []string{"metadata", "data", "book"} {
+		if nested, ok := raw[key].(map[string]any); ok {
+			for k, v := range nested {
+				if _, exists := raw[k]; !exists {
+					raw[k] = v
+				}
+			}
+		}
+	}
 	str := func(keys ...string) string {
 		for _, k := range keys {
 			if v, ok := raw[k].(string); ok && strings.TrimSpace(v) != "" {
@@ -244,6 +262,22 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 			}
 		}
 		return ""
+	}
+	if r.Author == "" {
+		for _, k := range []string{"authors", "author_names"} {
+			if values, ok := raw[k].([]any); ok {
+				var names []string
+				for _, v := range values {
+					if name, ok := v.(string); ok {
+						names = append(names, strings.TrimSpace(name))
+					}
+				}
+				r.Author = strings.Join(names, ", ")
+				if r.Author != "" {
+					break
+				}
+			}
+		}
 	}
 	if r.Title == "" {
 		r.Title = str("title", "title_sort", "book_title")
