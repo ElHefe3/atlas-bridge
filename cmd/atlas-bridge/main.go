@@ -97,7 +97,7 @@ func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logge
 				return
 			}
 			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
-			count, skipped, err := catalogue.IngestZstdFilesJSONL(ctx, cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
+			count, skipped, err := ingestFilesOnce(ctx, catalogue, cfg.CatalogueFilesZstd, cfg.CatalogueMaxExpanded)
 			if err != nil {
 				logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
 			} else {
@@ -126,13 +126,31 @@ func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logge
 		}
 	}
 	if cfg.CatalogueZstd != "" {
-		count, skipped, err := catalogue.IngestZstdJSONL(ctx, cfg.CatalogueZstd, 0, cfg.CatalogueMaxExpanded)
+		count, skipped, err := ingestRecordsOnce(ctx, catalogue, cfg.CatalogueZstd, cfg.CatalogueMaxExpanded)
 		if err != nil {
 			logger.Error("compressed catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
 		} else {
 			logger.Info("compressed catalogue ingested", "records", count, "skipped", skipped)
 		}
 	}
+}
+
+func ingestRecordsOnce(ctx context.Context, catalogue *catalog.Store, path string, max int64) (int, int, error) {
+	return ingestOnce(path, func() (int, int, error) { return catalogue.IngestZstdJSONL(ctx, path, 0, max) })
+}
+func ingestFilesOnce(ctx context.Context, catalogue *catalog.Store, path string, max int64) (int, int, error) {
+	return ingestOnce(path, func() (int, int, error) { return catalogue.IngestZstdFilesJSONL(ctx, path, 0, max) })
+}
+func ingestOnce(path string, fn func() (int, int, error)) (int, int, error) {
+	marker := path + ".ingested"
+	if _, err := os.Stat(marker); err == nil {
+		return 0, 0, nil
+	}
+	count, skipped, err := fn()
+	if err == nil {
+		_ = os.WriteFile(marker, []byte("complete\n"), 0o600)
+	}
+	return count, skipped, err
 }
 
 func retrieveCatalogueTorrent(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
