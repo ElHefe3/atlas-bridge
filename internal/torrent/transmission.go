@@ -34,11 +34,28 @@ type AddResponse struct {
 }
 type Status struct {
 	ID             int     `json:"id"`
+	Name           string  `json:"name"`
 	Status         int     `json:"status"`
 	PercentDone    float64 `json:"percentDone"`
 	TotalSize      int64   `json:"totalSize"`
 	DownloadedEver int64   `json:"downloadedEver"`
 	Error          string  `json:"errorString"`
+}
+
+func (t *Transmission) FindByName(ctx context.Context, name string) (Status, bool, error) {
+	var out struct {
+		Torrents []Status `json:"torrents"`
+	}
+	err := t.call(ctx, "torrent-get", map[string]any{"fields": []string{"id", "name", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
+	if err != nil {
+		return Status{}, false, err
+	}
+	for _, item := range out.Torrents {
+		if item.Name == name {
+			return item, true, nil
+		}
+	}
+	return Status{}, false, nil
 }
 
 func NewTransmission(endpoint string) *Transmission {
@@ -117,7 +134,7 @@ func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
 	var out struct {
 		Torrents []Status `json:"torrents"`
 	}
-	err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"id", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
+	err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"id", "name", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
 	if err != nil {
 		return Status{}, err
 	}
@@ -133,15 +150,31 @@ func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) erro
 // DownloadFile queues a validated torrent and waits for the requested file to
 // complete. The caller must provide a path inside the Bridge staging root.
 func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path string, maxBytes int64) (*os.File, int64, error) {
-	added, err := t.Add(ctx, req)
+	name := filepath.Base(path)
+	existing, found, err := t.FindByName(ctx, name)
+	owned := false
 	if err != nil {
 		return nil, 0, err
 	}
-	defer t.Remove(context.Background(), added.ID, true)
+	addedID := 0
+	if found {
+		addedID = existing.ID
+	} else {
+		added, addErr := t.Add(ctx, req)
+		err = addErr
+		addedID = added.ID
+		owned = true
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if owned {
+		defer t.Remove(context.Background(), addedID, true)
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		status, err := t.Get(ctx, added.ID)
+		status, err := t.Get(ctx, addedID)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -164,7 +197,7 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 	if !filepath.IsAbs(filePath) {
 		return nil, 0, fmt.Errorf("staging path must be absolute")
 	}
-	f, err := os.Open(filePath)
+	f, err := openTorrentFile(filePath)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -178,4 +211,19 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 		return nil, 0, fmt.Errorf("download exceeds configured size limit")
 	}
 	return f, info.Size(), nil
+}
+
+func openTorrentFile(path string) (*os.File, error) {
+	candidates := []string{path}
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	// LinuxServer Transmission keeps incomplete payloads in an `incomplete`
+	// child directory until completion. Support both layouts without exposing
+	// that implementation detail to callers.
+	candidates = append(candidates, filepath.Join(dir, "incomplete", base), filepath.Join(dir, "complete", base))
+	for _, candidate := range candidates {
+		if f, err := os.Open(candidate); err == nil {
+			return f, nil
+		}
+	}
+	return nil, os.ErrNotExist
 }

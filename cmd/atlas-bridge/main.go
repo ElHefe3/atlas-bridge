@@ -143,13 +143,14 @@ func retrieveCatalogueTorrent(ctx context.Context, cfg config.Config, logger *sl
 	if err := os.MkdirAll(filepath.Dir(cfg.CatalogueZstd), 0o700); err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(cfg.CatalogueZstd), ".catalogue-torrent-")
-	if err != nil {
+	root := filepath.Join(filepath.Dir(cfg.CatalogueZstd), "torrents")
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	dir := root
 	client := torrent.NewTransmission(cfg.TransmissionRPC)
-	f, size, err := client.DownloadFile(ctx, torrent.AddRequest{Metainfo: cfg.CatalogueTorrent, DownloadDir: dir}, filepath.Join(dir, rel), cfg.CataloguePayloadLimit)
+	transmissionDir := "/downloads"
+	f, size, err := client.DownloadFile(ctx, torrent.AddRequest{Metainfo: cfg.CatalogueTorrent, DownloadDir: transmissionDir}, filepath.Join(dir, rel), cfg.CataloguePayloadLimit)
 	if err != nil {
 		return err
 	}
