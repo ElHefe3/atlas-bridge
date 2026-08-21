@@ -52,58 +52,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer catalogue.Close()
-	if cfg.CatalogueTorrent != "" {
-		if cfg.CatalogueZstd == "" || cfg.CatalogueTorrentPath == "" {
-			logger.Error("catalogue torrent requires ATLAS_BRIDGE_CATALOGUE_ZSTD and ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH")
-		} else if err := retrieveCatalogueTorrent(context.Background(), cfg, logger); err != nil {
-			logger.Error("catalogue torrent retrieval failed", "error", err)
-		} else {
-			logger.Info("catalogue torrent retrieved", "path", cfg.CatalogueZstd)
-		}
-	}
-	if cfg.CatalogueFilesTorrent != "" {
-		filesCfg := cfg
-		filesCfg.CatalogueTorrent = cfg.CatalogueFilesTorrent
-		filesCfg.CatalogueTorrentPath = cfg.CatalogueFilesTorrentPath
-		filesCfg.CatalogueZstd = cfg.CatalogueFilesZstd
-		if cfg.CatalogueFilesZstd == "" || cfg.CatalogueFilesTorrentPath == "" {
-			logger.Error("file catalogue torrent requires ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD and ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH")
-		} else if err := retrieveCatalogueTorrent(context.Background(), filesCfg, logger); err != nil {
-			logger.Error("file catalogue torrent retrieval failed", "error", err)
-		} else {
-			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
-		}
-	}
-	if cfg.CatalogueJSONL != "" {
-		input, openErr := os.Open(cfg.CatalogueJSONL)
-		if openErr != nil {
-			logger.Error("catalogue ingest failed", "error", openErr)
-			os.Exit(1)
-		}
-		count, ingestErr := catalogue.IngestJSONL(context.Background(), input, 0)
-		input.Close()
-		if ingestErr != nil {
-			logger.Error("catalogue ingest failed", "records", count, "error", ingestErr)
-			os.Exit(1)
-		}
-		logger.Info("catalogue ingested", "records", count)
-	}
-	if cfg.CatalogueZstd != "" {
-		count, skipped, ingestErr := catalogue.IngestZstdJSONL(context.Background(), cfg.CatalogueZstd, 0, cfg.CatalogueMaxExpanded)
-		if ingestErr != nil {
-			logger.Error("compressed catalogue ingest failed", "records", count, "skipped", skipped, "error", ingestErr)
-		} else {
-			logger.Info("compressed catalogue ingested", "records", count, "skipped", skipped)
-		}
-	}
-	if cfg.CatalogueFilesZstd != "" {
-		count, skipped, ingestErr := catalogue.IngestZstdFilesJSONL(context.Background(), cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
-		if ingestErr != nil {
-			logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", ingestErr)
-		} else {
-			logger.Info("compressed file catalogue ingested", "records", count, "skipped", skipped)
-		}
-	}
 	annaHTTP, err := safehttp.New(cfg.AnnaOrigins, cfg.RequestTimeout, cfg.DownloadLimit)
 	if err != nil {
 		logger.Error("Anna HTTP policy failed", "error", err)
@@ -118,6 +66,7 @@ func main() {
 	serverAPI := api.NewWithCatalogueAndProviders(cfg.BridgeToken, cfg.PublicBaseURL, registered, logger, catalogue, cfg.DataPath+"-staging", cfg.DownloadLimit)
 	server := &http.Server{Addr: cfg.ListenAddress, Handler: serverAPI.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 10 * time.Minute, MaxHeaderBytes: 1 << 20}
 	serverAPI.ConfigureTorrentSources(catalogue, torrent.NewTransmission(cfg.TransmissionRPC))
+	go syncConfiguredCatalogues(cfg, catalogue, logger)
 	go func() {
 		logger.Info("Atlas Bridge listening", "address", cfg.ListenAddress)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -132,6 +81,57 @@ func main() {
 	defer done()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("shutdown failed", "error", err)
+	}
+}
+
+func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logger *slog.Logger) {
+	ctx := context.Background()
+	if cfg.CatalogueTorrent != "" && cfg.CatalogueZstd != "" && cfg.CatalogueTorrentPath != "" {
+		if err := retrieveCatalogueTorrent(ctx, cfg, logger); err != nil {
+			logger.Error("catalogue torrent retrieval failed", "error", err)
+		} else {
+			logger.Info("catalogue torrent retrieved", "path", cfg.CatalogueZstd)
+		}
+	}
+	if cfg.CatalogueFilesTorrent != "" && cfg.CatalogueFilesZstd != "" && cfg.CatalogueFilesTorrentPath != "" {
+		filesCfg := cfg
+		filesCfg.CatalogueTorrent = cfg.CatalogueFilesTorrent
+		filesCfg.CatalogueTorrentPath = cfg.CatalogueFilesTorrentPath
+		filesCfg.CatalogueZstd = cfg.CatalogueFilesZstd
+		if err := retrieveCatalogueTorrent(ctx, filesCfg, logger); err != nil {
+			logger.Error("file catalogue torrent retrieval failed", "error", err)
+		} else {
+			logger.Info("file catalogue torrent retrieved", "path", cfg.CatalogueFilesZstd)
+		}
+	}
+	if cfg.CatalogueJSONL != "" {
+		if input, err := os.Open(cfg.CatalogueJSONL); err == nil {
+			count, ingestErr := catalogue.IngestJSONL(ctx, input, 0)
+			_ = input.Close()
+			if ingestErr != nil {
+				logger.Error("catalogue ingest failed", "records", count, "error", ingestErr)
+			} else {
+				logger.Info("catalogue ingested", "records", count)
+			}
+		} else {
+			logger.Error("catalogue ingest failed", "error", err)
+		}
+	}
+	if cfg.CatalogueZstd != "" {
+		count, skipped, err := catalogue.IngestZstdJSONL(ctx, cfg.CatalogueZstd, 0, cfg.CatalogueMaxExpanded)
+		if err != nil {
+			logger.Error("compressed catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
+		} else {
+			logger.Info("compressed catalogue ingested", "records", count, "skipped", skipped)
+		}
+	}
+	if cfg.CatalogueFilesZstd != "" {
+		count, skipped, err := catalogue.IngestZstdFilesJSONL(ctx, cfg.CatalogueFilesZstd, 0, cfg.CatalogueMaxExpanded)
+		if err != nil {
+			logger.Error("compressed file catalogue ingest failed", "records", count, "skipped", skipped, "error", err)
+		} else {
+			logger.Info("compressed file catalogue ingested", "records", count, "skipped", skipped)
+		}
 	}
 }
 
