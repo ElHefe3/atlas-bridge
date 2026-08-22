@@ -8,6 +8,7 @@ import (
 	"github.com/ElHefe3/atlas-bridge/internal/model"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -324,7 +325,74 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 // IngestZstdJSONL streams a seekable or regular zstd-compressed JSONL dump.
 // It is deliberately bounded so a bad community dataset cannot exhaust the bridge.
 func (s *Store) IngestZstdJSONL(ctx context.Context, path string, limit int, maxExpanded int64) (int, int, error) {
-	return s.ingestZstd(ctx, path, limit, maxExpanded, s.SyncAnnaJSONL)
+	progressPath := path + ".progress"
+	start := readProgress(progressPath)
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	dec, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer dec.Close()
+	input := io.Reader(&checkpointReader{reader: bufio.NewReader(dec), skip: start, seen: start, progressPath: progressPath})
+	if maxExpanded > 0 {
+		input = io.LimitReader(input, maxExpanded)
+	}
+	count, skipped, err := s.SyncAnnaJSONL(ctx, input, limit)
+	if err == nil {
+		_ = os.Remove(progressPath)
+	}
+	return count, skipped, err
+}
+
+func readProgress(path string) int64 {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	return n
+}
+
+type checkpointReader struct {
+	reader       *bufio.Reader
+	skip         int64
+	seen         int64
+	progressPath string
+	pending      []byte
+}
+
+func (r *checkpointReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		line, err := r.reader.ReadBytes('\n')
+		if len(line) > 0 {
+			r.seen++
+			if r.skip > 0 {
+				r.skip--
+				continue
+			}
+			if r.seen%500 == 0 {
+				_ = writeProgress(r.progressPath, r.seen-500)
+			}
+			r.pending = line
+		}
+		if err != nil && len(r.pending) == 0 {
+			return 0, err
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+func writeProgress(path string, n int64) error {
+	tmp := filepath.Clean(path) + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(n, 10)), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (s *Store) IngestZstdFilesJSONL(ctx context.Context, path string, limit int, maxExpanded int64) (int, int, error) {
