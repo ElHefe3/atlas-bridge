@@ -1,9 +1,20 @@
 package acquisition
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/ElHefe3/atlas-bridge/internal/catalog"
+	"github.com/ElHefe3/atlas-bridge/internal/model"
+	"github.com/ElHefe3/atlas-bridge/internal/torrent"
 )
 
 func TestCompletedFileIsConsumedAndRemoved(t *testing.T) {
@@ -26,4 +37,103 @@ func TestCompletedFileIsConsumedAndRemoved(t *testing.T) {
 	if _, ok = m.File("job"); ok {
 		t.Fatal("completed file was consumable more than once")
 	}
+}
+
+type torrentOnlyProvider struct{}
+
+func (torrentOnlyProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{ID: "anna-local", Name: "Local catalogue", SearchAvailable: true, DownloadConfigured: true}
+}
+func (torrentOnlyProvider) Search(context.Context, string, model.SearchOptions) (model.SearchResponse, error) {
+	return model.SearchResponse{}, nil
+}
+func (torrentOnlyProvider) Details(context.Context, string) (model.Book, error) {
+	return model.Book{}, nil
+}
+func (torrentOnlyProvider) OpenCover(context.Context, string) (*model.RemoteFile, error) {
+	return nil, errors.New("not available")
+}
+func (torrentOnlyProvider) OpenFile(context.Context, string, string) (*model.RemoteFile, error) {
+	return nil, errors.New("direct fallback should not be used")
+}
+
+func TestTorrentAcquisitionCreatesStagingAndCompletes(t *testing.T) {
+	root := t.TempDir()
+	store, err := catalog.Open(filepath.Join(root, "catalogue.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.PutLocator(context.Background(), catalog.Locator{
+		ProviderID: "anna-local", ExternalID: "book", FileID: "epub", Kind: catalog.LocatorTorrentFile,
+		Metainfo: "https://example.test/data.torrent", Path: "folder/book.epub",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var downloadDir string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var call struct {
+			Method    string         `json:"method"`
+			Arguments map[string]any `json:"arguments"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
+			t.Error(err)
+			return
+		}
+		arguments := map[string]any{}
+		switch call.Method {
+		case "torrent-add":
+			downloadDir, _ = call.Arguments["download-dir"].(string)
+			arguments["torrent-added"] = map[string]any{"id": 9, "name": "folder", "hashString": "fixture"}
+		case "torrent-get":
+			fields, _ := call.Arguments["fields"].([]any)
+			if len(fields) == 1 && fields[0] == "files" {
+				arguments["torrents"] = []any{map[string]any{"files": []any{map[string]any{"name": "folder/book.epub", "length": 11}}}}
+			} else {
+				arguments["torrents"] = []any{map[string]any{"id": 9, "percentDone": 1, "sizeWhenDone": 11, "downloadedEver": 11}}
+			}
+		case "torrent-start":
+			jobDir := filepath.Base(filepath.ToSlash(downloadDir))
+			path := filepath.Join(root, "torrents", jobDir, "folder", "book.epub")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Error(err)
+			} else if err := os.WriteFile(path, []byte("PK\x03\x04fixture"), 0o600); err != nil {
+				t.Error(err)
+			}
+		case "torrent-set", "torrent-remove":
+		default:
+			t.Errorf("unexpected RPC method %q", call.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": "success", "arguments": arguments})
+	}))
+	defer server.Close()
+
+	m := NewManagerWithProviders([]model.Provider{torrentOnlyProvider{}}, filepath.Join(root, "staging"), 1024)
+	m.SetTorrentSources(store, torrent.NewTransmission(server.URL))
+	job, err := m.Create(context.Background(), model.AcquisitionRequest{ProviderID: "anna-local", ExternalID: "book", FileID: "epub"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, _ := m.Get(job.ID)
+		if status.Status == model.AcquisitionCompleted {
+			file, ok := m.File(job.ID)
+			if !ok {
+				t.Fatal("completed acquisition had no file")
+			}
+			data, readErr := io.ReadAll(file)
+			closeErr := file.Close()
+			if readErr != nil || closeErr != nil || string(data) != "PK\x03\x04fixture" {
+				t.Fatalf("read=%v close=%v data=%q", readErr, closeErr, data)
+			}
+			return
+		}
+		if status.Status == model.AcquisitionFailed {
+			t.Fatalf("acquisition failed: %s", status.Error)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("acquisition did not complete")
 }

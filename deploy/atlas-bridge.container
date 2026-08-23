@@ -1,7 +1,7 @@
 [Unit]
 Description=Atlas Bridge
-After=network-online.target atlas-transmission.service
-Wants=network-online.target atlas-transmission.service
+After=network-online.target transmission.service
+Wants=network-online.target transmission.service
 
 [Container]
 Image=ghcr.io/elhefe3/atlas-bridge:edge

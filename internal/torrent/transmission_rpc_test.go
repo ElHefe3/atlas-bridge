@@ -22,6 +22,7 @@ func TestDownloadFileSelectsOnlyRequestedTorrentEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wanted, unwanted []int
+	var progress Status
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var call struct {
 			Method    string         `json:"method"`
@@ -58,13 +59,68 @@ func TestDownloadFileSelectsOnlyRequestedTorrentEntry(t *testing.T) {
 	client := NewTransmission(server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	file, size, err := client.DownloadFile(ctx, AddRequest{Metainfo: "https://example.test/data.torrent", DownloadDir: "/downloads/job"}, target, 1024)
+	file, size, err := client.DownloadFile(ctx, AddRequest{Metainfo: "https://example.test/data.torrent", DownloadDir: "/downloads/job"}, target, 1024, func(status Status) { progress = status })
 	if err != nil {
 		t.Fatal(err)
 	}
 	file.Close()
-	if size != 11 || !reflect.DeepEqual(wanted, []int{1}) || !reflect.DeepEqual(unwanted, []int{0}) {
-		t.Fatalf("size=%d wanted=%v unwanted=%v", size, wanted, unwanted)
+	if size != 11 || progress.PercentDone != 1 || !reflect.DeepEqual(wanted, []int{1}) || !reflect.DeepEqual(unwanted, []int{0}) {
+		t.Fatalf("size=%d progress=%v wanted=%v unwanted=%v", size, progress.PercentDone, wanted, unwanted)
+	}
+}
+
+func TestDownloadFileReplacesStaleDuplicate(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "folder", "book.epub")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("PK\x03\x04fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addCalls, removeCalls := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var call struct {
+			Method    string         `json:"method"`
+			Arguments map[string]any `json:"arguments"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
+			t.Error(err)
+			return
+		}
+		arguments := map[string]any{}
+		switch call.Method {
+		case "torrent-add":
+			addCalls++
+			if addCalls == 1 {
+				arguments["torrent-duplicate"] = map[string]any{"id": 7, "name": "folder", "hashString": "fixture"}
+			} else {
+				arguments["torrent-added"] = map[string]any{"id": 8, "name": "folder", "hashString": "fixture"}
+			}
+		case "torrent-get":
+			fields, _ := call.Arguments["fields"].([]any)
+			if len(fields) == 1 && fields[0] == "files" {
+				arguments["torrents"] = []any{map[string]any{"files": []any{map[string]any{"name": "folder/book.epub", "length": 11}}}}
+			} else {
+				arguments["torrents"] = []any{map[string]any{"id": 8, "percentDone": 1, "sizeWhenDone": 11}}
+			}
+		case "torrent-remove":
+			removeCalls++
+		case "torrent-set", "torrent-start":
+		default:
+			t.Errorf("unexpected RPC method %q", call.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": "success", "arguments": arguments})
+	}))
+	defer server.Close()
+
+	file, _, err := NewTransmission(server.URL).DownloadFile(context.Background(), AddRequest{Metainfo: "https://example.test/data.torrent", DownloadDir: "/downloads/job"}, target, 1024, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	if addCalls != 2 || removeCalls != 2 {
+		t.Fatalf("addCalls=%d removeCalls=%d", addCalls, removeCalls)
 	}
 }
 

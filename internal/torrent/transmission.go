@@ -188,7 +188,7 @@ func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) erro
 
 // DownloadFile queues a validated torrent and waits for the requested file to
 // complete. The caller must provide a path inside the Bridge staging root.
-func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path string, maxBytes int64) (*os.File, int64, error) {
+func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path string, maxBytes int64, onProgress func(Status)) (*os.File, int64, error) {
 	if !filepath.IsAbs(path) {
 		return nil, 0, fmt.Errorf("staging path must be absolute")
 	}
@@ -202,13 +202,26 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 	req.Paused = true
 	added, err := t.Add(ctx, req)
 	addedID := added.ID
-	owned := !added.Duplicate
 	if err != nil {
 		return nil, 0, err
 	}
-	if owned {
-		defer t.Remove(context.Background(), addedID, true)
+	// Bridge is the sole controller of this private Transmission instance. A
+	// duplicate here is a stale job left by a prior interrupted Bridge process;
+	// remove it before applying this acquisition's exact file selection.
+	if added.Duplicate {
+		if err = t.Remove(ctx, addedID, true); err != nil {
+			return nil, 0, fmt.Errorf("remove stale torrent: %w", err)
+		}
+		added, err = t.Add(ctx, req)
+		if err != nil {
+			return nil, 0, err
+		}
+		if added.Duplicate {
+			return nil, 0, fmt.Errorf("torrent remained active after stale job cleanup")
+		}
+		addedID = added.ID
 	}
+	defer t.Remove(context.Background(), addedID, true)
 	var files []File
 	for len(files) == 0 {
 		files, err = t.Files(ctx, addedID)
@@ -257,6 +270,9 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 		}
 		if status.Error != "" {
 			return nil, 0, fmt.Errorf("transmission: %s", status.Error)
+		}
+		if onProgress != nil {
+			onProgress(status)
 		}
 		if status.PercentDone >= 1 {
 			break

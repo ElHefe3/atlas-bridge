@@ -179,7 +179,7 @@ func retrieveCatalogueTorrent(ctx context.Context, cfg config.Config, logger *sl
 	dir := root
 	client := torrent.NewTransmission(cfg.TransmissionRPC)
 	transmissionDir := "/downloads"
-	f, size, err := client.DownloadFile(ctx, torrent.AddRequest{Metainfo: cfg.CatalogueTorrent, DownloadDir: transmissionDir}, filepath.Join(dir, rel), cfg.CataloguePayloadLimit)
+	f, size, err := client.DownloadFile(ctx, torrent.AddRequest{Metainfo: cfg.CatalogueTorrent, DownloadDir: transmissionDir}, filepath.Join(dir, rel), cfg.CataloguePayloadLimit, nil)
 	if err != nil {
 		return err
 	}

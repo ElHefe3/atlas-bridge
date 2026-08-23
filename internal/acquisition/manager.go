@@ -22,6 +22,7 @@ type Manager struct {
 	jobs         map[string]*model.Acquisition
 	files        map[string]string
 	cancels      map[string]context.CancelFunc
+	workers      chan struct{}
 	providers    map[string]model.Provider
 	staging      string
 	maxBytes     int64
@@ -35,7 +36,15 @@ func (m *Manager) SetTorrentSources(locators *catalog.Store, client *torrent.Tra
 }
 
 func NewManager() *Manager {
-	return &Manager{jobs: map[string]*model.Acquisition{}, files: map[string]string{}, cancels: map[string]context.CancelFunc{}}
+	return &Manager{
+		jobs:    map[string]*model.Acquisition{},
+		files:   map[string]string{},
+		cancels: map[string]context.CancelFunc{},
+		// A single worker is the safe default because Anna data torrents are
+		// shared across many books. Transmission de-duplicates torrents by
+		// infohash, so concurrent file-selection changes would otherwise race.
+		workers: make(chan struct{}, 1),
+	}
 }
 
 func NewManagerWithProviders(providers []model.Provider, staging string, maxBytes int64) *Manager {
@@ -55,7 +64,7 @@ func (m *Manager) Create(_ context.Context, req model.AcquisitionRequest) (model
 		return model.Acquisition{}, err
 	}
 	id := hex.EncodeToString(idb)
-	j := &model.Acquisition{ID: id, ProviderID: req.ProviderID, ExternalID: req.ExternalID, FileID: req.FileID, Status: model.AcquisitionQueued}
+	j := &model.Acquisition{ID: id, ProviderID: req.ProviderID, ExternalID: req.ExternalID, FileID: req.FileID, Format: strings.ToLower(strings.TrimSpace(req.FileID)), Status: model.AcquisitionQueued}
 	m.mu.Lock()
 	m.jobs[id] = j
 	m.mu.Unlock()
@@ -71,6 +80,13 @@ func (m *Manager) Create(_ context.Context, req model.AcquisitionRequest) (model
 				delete(m.cancels, id)
 				m.mu.Unlock()
 			}()
+			select {
+			case m.workers <- struct{}{}:
+				defer func() { <-m.workers }()
+			case <-workerCtx.Done():
+				m.fail(id, "acquisition timed out while queued")
+				return
+			}
 			m.run(workerCtx, id, req)
 		}()
 	}
@@ -92,17 +108,22 @@ func (m *Manager) run(ctx context.Context, id string, req model.AcquisitionReque
 			locator, hasTorrentLocator = indexed, true
 		}
 	}
-	// Prefer a provider's bounded direct resolver when configured. Large bulk
-	// preservation torrents are the deterministic fallback and only the chosen
-	// file is enabled in Transmission.
+	// The local catalogue's deterministic selected-file torrent is the primary
+	// acquisition path. Keep the provider's bounded member resolver as a
+	// fallback when a torrent has no peers or cannot be loaded.
+	var torrentErr error
+	if hasTorrentLocator {
+		torrentCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		torrentErr = m.runTorrent(torrentCtx, id, req, locator)
+		cancel()
+		if torrentErr == nil {
+			return
+		}
+	}
 	remote, err := p.OpenFile(ctx, req.ExternalID, req.FileID)
 	if err != nil {
-		if hasTorrentLocator {
-			if torrentErr := m.runTorrent(ctx, id, req, locator); torrentErr == nil {
-				return
-			} else {
-				err = torrentErr
-			}
+		if torrentErr != nil {
+			err = fmt.Errorf("torrent acquisition failed: %v; direct fallback failed: %w", torrentErr, err)
 		}
 		m.fail(id, err.Error())
 		return
@@ -191,6 +212,9 @@ func (m *Manager) runTorrent(ctx context.Context, id string, req model.Acquisiti
 		return fmt.Errorf("unsafe torrent path")
 	}
 	sharedRoot := filepath.Join(filepath.Dir(m.staging), "torrents")
+	if err := os.MkdirAll(m.staging, 0o700); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(sharedRoot, 0o700); err != nil {
 		return err
 	}
@@ -199,7 +223,16 @@ func (m *Manager) runTorrent(ctx context.Context, id string, req model.Acquisiti
 		return err
 	}
 	defer os.RemoveAll(dir)
-	file, size, err := m.transmission.DownloadFile(ctx, torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: filepath.Join("/downloads", id+"-torrent")}, filepath.Join(dir, locator.Path), m.maxBytes)
+	file, size, err := m.transmission.DownloadFile(ctx, torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: filepath.Join("/downloads", id+"-torrent")}, filepath.Join(dir, locator.Path), m.maxBytes, func(status torrent.Status) {
+		m.update(id, func(j *model.Acquisition) {
+			j.Bytes = status.DownloadedEver
+			if status.SizeWhenDone > 0 {
+				total := status.SizeWhenDone
+				j.TotalBytes = &total
+				j.Progress = .05 + .9*status.PercentDone
+			}
+		})
+	})
 	if err != nil {
 		return err
 	}

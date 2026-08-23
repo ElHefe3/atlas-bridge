@@ -7,6 +7,7 @@ Requires=atlas-bridge.network
 Image=docker.io/linuxserver/transmission:4.0.6
 ContainerName=atlas-transmission
 Network=atlas-bridge.network
+UserNS=keep-id:uid=65532,gid=65532
 Environment=PUID=65532
 Environment=PGID=65532
 Environment=TZ=Africa/Johannesburg
@@ -14,6 +15,10 @@ Environment=TRANSMISSION_WEB_HOME=/combustion-release/
 Environment=TRANSMISSION_RPC_AUTHENTICATION_REQUIRED=false
 Volume=/home/kreef/atlas-bridge/transmission:/config:Z
 Volume=/home/kreef/atlas-bridge/data/torrents:/downloads:Z
+HealthCmd=/usr/bin/transmission-remote 127.0.0.1:9091 -l
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
 
 [Service]
 Restart=always
