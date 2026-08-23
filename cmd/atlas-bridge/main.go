@@ -62,7 +62,7 @@ func main() {
 		logger.Error("LibGen HTTP policy failed", "error", err)
 		os.Exit(1)
 	}
-	metadataHTTP, err := safehttp.New(cfg.MetadataOrigins, cfg.RequestTimeout, cfg.MetadataLimit)
+	metadataHTTP, err := safehttp.NewWithSuffixes(cfg.MetadataOrigins, []string{".us.archive.org"}, cfg.RequestTimeout, cfg.MetadataLimit)
 	if err != nil {
 		logger.Error("metadata HTTP policy failed", "error", err)
 		os.Exit(1)

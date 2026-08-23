@@ -16,12 +16,20 @@ import (
 const MetadataIP = "169.254.169.254"
 
 type Client struct {
-	http    *http.Client
-	allowed map[string]struct{}
-	maxBody int64
+	http     *http.Client
+	allowed  map[string]struct{}
+	suffixes []string
+	maxBody  int64
 }
 
 func New(origins []string, timeout time.Duration, maxBody int64) (*Client, error) {
+	return NewWithSuffixes(origins, nil, timeout, maxBody)
+}
+
+// NewWithSuffixes permits narrowly scoped provider-owned CDN host families in
+// addition to exact origins. Callers must use fixed compile-time suffixes, not
+// manifest or request input.
+func NewWithSuffixes(origins, suffixes []string, timeout time.Duration, maxBody int64) (*Client, error) {
 	allowed := make(map[string]struct{}, len(origins))
 	for _, raw := range origins {
 		u, err := url.Parse(raw)
@@ -29,6 +37,14 @@ func New(origins []string, timeout time.Duration, maxBody int64) (*Client, error
 			return nil, fmt.Errorf("invalid HTTPS origin %q", raw)
 		}
 		allowed[strings.ToLower(u.Scheme+"://"+u.Host)] = struct{}{}
+	}
+	normalizedSuffixes := make([]string, 0, len(suffixes))
+	for _, suffix := range suffixes {
+		suffix = strings.ToLower(strings.TrimSpace(suffix))
+		if !strings.HasPrefix(suffix, ".") || strings.ContainsAny(suffix, "/:@") || len(suffix) < 4 {
+			return nil, fmt.Errorf("invalid HTTPS host suffix %q", suffix)
+		}
+		normalizedSuffixes = append(normalizedSuffixes, suffix)
 	}
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
@@ -56,7 +72,7 @@ func New(origins []string, timeout time.Duration, maxBody int64) (*Client, error
 		}
 		return nil, errors.New("destination resolved only to blocked addresses")
 	}
-	c := &Client{allowed: allowed, maxBody: maxBody}
+	c := &Client{allowed: allowed, suffixes: normalizedSuffixes, maxBody: maxBody}
 	c.http = &http.Client{Transport: transport}
 	c.http.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
@@ -99,6 +115,12 @@ func (c *Client) ValidateURL(u *url.URL) error {
 		return errors.New("only credential-free HTTPS URLs are permitted")
 	}
 	if _, ok := c.allowed[strings.ToLower(u.Scheme+"://"+u.Host)]; !ok {
+		host := strings.ToLower(u.Hostname())
+		for _, suffix := range c.suffixes {
+			if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
+				return nil
+			}
+		}
 		return fmt.Errorf("origin %s is not allowed", u.Host)
 	}
 	return nil

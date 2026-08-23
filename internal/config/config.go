@@ -60,7 +60,7 @@ func Load() (Config, error) {
 	}
 	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
 	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc"))
-	c.MetadataOrigins = list("ATLAS_METADATA_ORIGINS", "https://openlibrary.org,https://covers.openlibrary.org")
+	c.MetadataOrigins = list("ATLAS_METADATA_ORIGINS", "https://openlibrary.org,https://covers.openlibrary.org,https://archive.org")
 	var err error
 	c.BridgeToken, err = secret("ATLAS_BRIDGE_TOKEN_FILE", "/run/secrets/bridge-token", true)
 	if err != nil {

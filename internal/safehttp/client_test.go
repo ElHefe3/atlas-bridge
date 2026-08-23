@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestPublicIP(t *testing.T) {
@@ -16,6 +17,23 @@ func TestPublicIP(t *testing.T) {
 	for raw, expected := range tests {
 		if actual := PublicIP(netip.MustParseAddr(raw)); actual != expected {
 			t.Errorf("PublicIP(%s) = %v, want %v", raw, actual, expected)
+		}
+	}
+}
+
+func TestAllowsOnlyConfiguredCDNSuffix(t *testing.T) {
+	c, err := NewWithSuffixes([]string{"https://covers.openlibrary.org"}, []string{".us.archive.org"}, time.Second, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, _ := url.Parse("https://ia800404.us.archive.org/file.jpg")
+	if err = c.ValidateURL(allowed); err != nil {
+		t.Fatalf("expected CDN host to be accepted: %v", err)
+	}
+	for _, raw := range []string{"https://us.archive.org.evil.example/file", "https://evilus.archive.org/file", "http://ia800404.us.archive.org/file"} {
+		target, _ := url.Parse(raw)
+		if err = c.ValidateURL(target); err == nil {
+			t.Fatalf("expected %s to be rejected", raw)
 		}
 	}
 }

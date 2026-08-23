@@ -45,7 +45,7 @@ Secrets are read from files rather than environment values:
 | `ATLAS_BRIDGE_DOWNLOAD_LIMIT` | 512 MiB | Maximum proxied response size |
 | `ATLAS_BRIDGE_REQUEST_TIMEOUT` | 45 seconds | Complete upstream request timeout |
 
-Redirects are limited and each target must use HTTPS and an explicitly configured origin. DNS is resolved by the bridge and loopback, RFC1918/ULA, link-local, CGNAT, reserved/documentation, multicast, and cloud-metadata addresses are rejected. Add a changed upstream origin explicitly; wildcard origins are intentionally unsupported.
+Redirects are limited and each target must use HTTPS and an explicitly configured origin. DNS is resolved by the bridge and loopback, RFC1918/ULA, link-local, CGNAT, reserved/documentation, multicast, and cloud-metadata addresses are rejected. Add a changed upstream origin explicitly. The only host-family exception is the compile-time `.us.archive.org` CDN suffix used by Open Library covers; it is not configurable by manifests or requests and retains the same DNS and redirect checks.
 
 ## Development
 
