@@ -86,6 +86,12 @@ func main() {
 
 func syncConfiguredCatalogues(cfg config.Config, catalogue *catalog.Store, logger *slog.Logger) {
 	ctx := context.Background()
+	if cfg.CataloguePauseFile != "" {
+		if _, err := os.Stat(cfg.CataloguePauseFile); err == nil {
+			logger.Info("catalogue ingestion paused", "file", cfg.CataloguePauseFile)
+			return
+		}
+	}
 	if cfg.CatalogueFilesTorrent != "" && cfg.CatalogueFilesZstd != "" && cfg.CatalogueFilesTorrentPath != "" {
 		go func() {
 			filesCfg := cfg

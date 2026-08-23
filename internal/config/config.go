@@ -31,6 +31,7 @@ type Config struct {
 	CatalogueFilesTorrentPath string
 	CatalogueMaxExpanded      int64
 	CataloguePayloadLimit     int64
+	CataloguePauseFile        string
 	TransmissionRPC           string
 }
 
@@ -53,6 +54,7 @@ func Load() (Config, error) {
 		CatalogueFilesTorrentPath: env("ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH", ""),
 		CatalogueMaxExpanded:      intEnv("ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED", 50<<30),
 		CataloguePayloadLimit:     intEnv("ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT", 4<<30),
+		CataloguePauseFile:        env("ATLAS_BRIDGE_CATALOGUE_PAUSE_FILE", "/data/catalogue-ingest.pause"),
 		TransmissionRPC:           env("ATLAS_TRANSMISSION_RPC", "http://transmission:9091/transmission/rpc"),
 	}
 	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
