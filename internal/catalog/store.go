@@ -221,6 +221,23 @@ func (s *Store) fileRecords(ctx context.Context, provider, external string) ([]m
 	return files, rows.Err()
 }
 
+// GetFile returns the normalized file metadata used by acquisition resolvers.
+// Retrieval locators stay internal to the bridge and are never serialized by
+// the public API.
+func (s *Store) GetFile(ctx context.Context, provider, external, fileID string) (model.File, bool, error) {
+	var f model.File
+	var md5, aacid sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT file_id,format,size,md5,aacid FROM file_records WHERE provider_id=? AND external_id=? AND file_id=?`, provider, external, fileID).Scan(&f.FileID, &f.Format, &f.Size, &md5, &aacid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.File{}, false, nil
+	}
+	if err != nil {
+		return model.File{}, false, err
+	}
+	f.MD5, f.AACID = md5.String, aacid.String
+	return f, true, nil
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
 // IngestJSONL streams normalized records so a multi-gigabyte dataset never
