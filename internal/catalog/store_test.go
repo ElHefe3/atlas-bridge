@@ -63,3 +63,12 @@ func TestDecodeZlib3RecordAliases(t *testing.T) {
 		t.Fatalf("unexpected record: %#v", r)
 	}
 }
+
+func TestFTSQueryDropsCommonStopwords(t *testing.T) {
+	if got := ftsQuery("Pride and Prejudice"); got != `"Pride"* AND "Prejudice"*` {
+		t.Fatalf("unexpected query: %s", got)
+	}
+	if got := ftsQuery(`the "and"`); got != `"the and"` {
+		t.Fatalf("unexpected all-stopword query: %s", got)
+	}
+}

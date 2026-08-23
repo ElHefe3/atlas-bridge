@@ -154,15 +154,7 @@ func (s *Store) Search(ctx context.Context, query string, page, pageSize int, fo
 	}
 	// Treat user input as terms, never as an FTS expression. This prevents
 	// punctuation such as ':' or '-' from changing the query grammar.
-	terms := strings.Fields(query)
-	quoted := make([]string, 0, len(terms))
-	for _, term := range terms {
-		term = strings.ReplaceAll(term, `"`, "")
-		if term != "" {
-			quoted = append(quoted, `"`+term+`"*`)
-		}
-	}
-	query = strings.Join(quoted, " AND ")
+	query = ftsQuery(query)
 	args := []any{query, pageSize, (page - 1) * pageSize}
 	filter := ""
 	if format != "" {
@@ -198,6 +190,33 @@ func (s *Store) Search(ctx context.Context, query string, page, pageSize int, fo
 		return nil, false, err
 	}
 	return out, len(out) == pageSize, nil
+}
+
+var searchStopwords = map[string]struct{}{
+	"a": {}, "an": {}, "and": {}, "as": {}, "at": {}, "by": {}, "for": {}, "from": {},
+	"in": {}, "of": {}, "on": {}, "or": {}, "the": {}, "to": {}, "with": {},
+}
+
+func ftsQuery(input string) string {
+	terms := strings.Fields(input)
+	filtered := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.ReplaceAll(term, `"`, "")
+		if term == "" {
+			continue
+		}
+		if len(terms) > 1 {
+			if _, stopword := searchStopwords[strings.ToLower(term)]; stopword {
+				continue
+			}
+		}
+		filtered = append(filtered, `"`+term+`"*`)
+	}
+	if len(filtered) == 0 {
+		phrase := strings.ReplaceAll(strings.TrimSpace(input), `"`, "")
+		return `"` + phrase + `"`
+	}
+	return strings.Join(filtered, " AND ")
 }
 
 func (s *Store) GetBook(ctx context.Context, provider, external string) (model.Book, bool, error) {
