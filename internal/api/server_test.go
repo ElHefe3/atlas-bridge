@@ -63,3 +63,18 @@ func TestHealthDoesNotRequireAuthentication(t *testing.T) {
 		t.Fatalf("got %d", response.Code)
 	}
 }
+
+func TestGlobalSearchDelegatesToNormalizedProvider(t *testing.T) {
+	server := New(testToken, "http://bridge", []model.Provider{fakeProvider{}}, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/v1/search?q=pride&provider=fake", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	if strings.Contains(body, "upstream.invalid") || !strings.Contains(body, "/v1/providers/fake/books/abc/cover") {
+		t.Fatalf("global search bypassed provider normalization: %s", body)
+	}
+}

@@ -70,10 +70,6 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
-		s.writeError(w, r, &model.ProviderError{Code: "catalogue_unavailable", Message: "local catalogue is not configured", Status: http.StatusServiceUnavailable, Retryable: true})
-		return
-	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len(q) < 2 || len(q) > 500 {
 		s.writeError(w, r, bad("invalid_query", "q must contain 2 to 500 characters"))
@@ -82,15 +78,24 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) {
 	page := boundedInt(r.URL.Query().Get("page"), 1, 1, 10000)
 	size := boundedInt(r.URL.Query().Get("pageSize"), 20, 1, 50)
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	books, more, err := s.catalog.Search(r.Context(), q, page, size, format)
+	providerID := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+	if providerID == "" {
+		providerID = "anna-local"
+	}
+	p, ok := s.providers[providerID]
+	if !ok || !p.Info().SearchAvailable {
+		s.writeError(w, r, &model.ProviderError{Code: "provider_not_found", Message: "provider was not found", Provider: providerID, Status: http.StatusNotFound})
+		return
+	}
+	result, err := p.Search(r.Context(), q, model.SearchOptions{Page: page, PageSize: size, Format: format})
 	if err != nil {
 		s.writeError(w, r, &model.ProviderError{Code: "catalogue_search_failed", Message: "local catalogue search failed", Status: http.StatusServiceUnavailable, Retryable: true})
 		return
 	}
-	for i := range books {
-		s.decorate(&books[i])
+	for i := range result.Results {
+		s.decorate(&result.Results[i])
 	}
-	writeJSON(w, http.StatusOK, model.SearchResponse{ProviderID: "", Query: q, Page: page, HasMore: more, Results: books})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) createAcquisition(w http.ResponseWriter, r *http.Request) {
