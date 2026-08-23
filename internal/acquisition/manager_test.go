@@ -1,6 +1,8 @@
 package acquisition
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +41,47 @@ func TestCompletedFileIsConsumedAndRemoved(t *testing.T) {
 	}
 }
 
+func minimalEPUB(t *testing.T) []byte {
+	t.Helper()
+	var data bytes.Buffer
+	archive := zip.NewWriter(&data)
+	mimetype, err := archive.CreateHeader(&zip.FileHeader{Name: "mimetype", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mimetype.Write([]byte("application/epub+zip")); err != nil {
+		t.Fatal(err)
+	}
+	container, err := archive.Create("META-INF/container.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = container.Write([]byte(`<?xml version="1.0"?><container/>`)); err != nil {
+		t.Fatal(err)
+	}
+	if err = archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return data.Bytes()
+}
+
+func TestEPUBValidationRequiresReadableStructure(t *testing.T) {
+	valid := filepath.Join(t.TempDir(), "valid.epub")
+	if err := os.WriteFile(valid, minimalEPUB(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !validSignature(valid, "epub") {
+		t.Fatal("valid EPUB was rejected")
+	}
+	invalid := filepath.Join(t.TempDir(), "invalid.epub")
+	if err := os.WriteFile(invalid, []byte("PK\x03\x04not-a-zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if validSignature(invalid, "epub") {
+		t.Fatal("invalid EPUB was accepted")
+	}
+}
+
 type torrentOnlyProvider struct{}
 
 func (torrentOnlyProvider) Info() model.ProviderInfo {
@@ -72,6 +115,7 @@ func TestTorrentAcquisitionCreatesStagingAndCompletes(t *testing.T) {
 	}
 
 	var downloadDir string
+	epub := minimalEPUB(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var call struct {
 			Method    string         `json:"method"`
@@ -89,16 +133,16 @@ func TestTorrentAcquisitionCreatesStagingAndCompletes(t *testing.T) {
 		case "torrent-get":
 			fields, _ := call.Arguments["fields"].([]any)
 			if len(fields) == 1 && fields[0] == "files" {
-				arguments["torrents"] = []any{map[string]any{"files": []any{map[string]any{"name": "folder/book.epub", "length": 11}}}}
+				arguments["torrents"] = []any{map[string]any{"files": []any{map[string]any{"name": "folder/book.epub", "length": len(epub)}}}}
 			} else {
-				arguments["torrents"] = []any{map[string]any{"id": 9, "percentDone": 1, "sizeWhenDone": 11, "downloadedEver": 11}}
+				arguments["torrents"] = []any{map[string]any{"id": 9, "percentDone": 1, "sizeWhenDone": len(epub), "downloadedEver": len(epub)}}
 			}
 		case "torrent-start":
 			jobDir := filepath.Base(filepath.ToSlash(downloadDir))
 			path := filepath.Join(root, "torrents", jobDir, "folder", "book.epub")
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Error(err)
-			} else if err := os.WriteFile(path, []byte("PK\x03\x04fixture"), 0o600); err != nil {
+			} else if err := os.WriteFile(path, epub, 0o600); err != nil {
 				t.Error(err)
 			}
 		case "torrent-set", "torrent-remove":
@@ -125,8 +169,8 @@ func TestTorrentAcquisitionCreatesStagingAndCompletes(t *testing.T) {
 			}
 			data, readErr := io.ReadAll(file)
 			closeErr := file.Close()
-			if readErr != nil || closeErr != nil || string(data) != "PK\x03\x04fixture" {
-				t.Fatalf("read=%v close=%v data=%q", readErr, closeErr, data)
+			if readErr != nil || closeErr != nil || !bytes.Equal(data, epub) {
+				t.Fatalf("read=%v close=%v bytes=%d", readErr, closeErr, len(data))
 			}
 			return
 		}

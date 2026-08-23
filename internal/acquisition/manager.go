@@ -1,6 +1,7 @@
 package acquisition
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -273,6 +274,9 @@ func (m *Manager) runTorrent(ctx context.Context, id string, req model.Acquisiti
 }
 
 func validSignature(path, format string) bool {
+	if format == "epub" {
+		return validEPUB(path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -284,6 +288,40 @@ func validSignature(path, format string) bool {
 		return n >= 5 && string(b[:5]) == "%PDF-"
 	}
 	return n >= 4 && string(b[:2]) == "PK"
+}
+
+func validEPUB(path string) bool {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return false
+	}
+	defer archive.Close()
+	if len(archive.File) == 0 || len(archive.File) > 10_000 {
+		return false
+	}
+	hasMimetype, hasContainer := false, false
+	for _, entry := range archive.File {
+		name := filepath.ToSlash(entry.Name)
+		if strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
+			return false
+		}
+		switch name {
+		case "mimetype":
+			reader, openErr := entry.Open()
+			if openErr != nil {
+				return false
+			}
+			value, readErr := io.ReadAll(io.LimitReader(reader, 64))
+			closeErr := reader.Close()
+			if readErr != nil || closeErr != nil || string(value) != "application/epub+zip" {
+				return false
+			}
+			hasMimetype = true
+		case "META-INF/container.xml":
+			hasContainer = true
+		}
+	}
+	return hasMimetype && hasContainer
 }
 func (m *Manager) update(id string, fn func(*model.Acquisition)) {
 	m.mu.Lock()
