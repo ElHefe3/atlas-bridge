@@ -166,10 +166,13 @@ func (s *Store) Search(ctx context.Context, query string, page, pageSize int, fo
 	args := []any{query, pageSize, (page - 1) * pageSize}
 	filter := ""
 	if format != "" {
-		filter = " AND EXISTS (SELECT 1 FROM json_each(books.files_json) f WHERE lower(json_extract(f.value,'$.format')) = ?)"
-		args = []any{query, format, pageSize, (page - 1) * pageSize}
+		filter = " AND EXISTS (SELECT 1 FROM file_records f WHERE f.provider_id=books.provider_id AND f.external_id=books.external_id AND lower(f.format)=?)"
+		args = []any{query, strings.ToLower(format), pageSize, (page - 1) * pageSize}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT provider_id,external_id,title,author,description,isbn,cover_url,files_json FROM books WHERE rowid IN (SELECT rowid FROM books_fts WHERE books_fts MATCH ?) `+filter+` ORDER BY title LIMIT ? OFFSET ?`, args...)
+	// ORDER BY rank allows FTS5 to stop once the requested page is found. The
+	// previous alphabetical sort materialized every match and became unusably
+	// slow on the full zlib3 catalogue.
+	rows, err := s.db.QueryContext(ctx, `SELECT books.provider_id,books.external_id,books.title,books.author,books.description,books.isbn,books.cover_url,books.files_json FROM books_fts JOIN books ON books.rowid=books_fts.rowid WHERE books_fts MATCH ? `+filter+` ORDER BY rank LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, false, err
 	}
