@@ -53,6 +53,10 @@ func (s *Server) ConfigureTorrentSources(store *catalog.Store, client *torrent.T
 	s.acquisitions.SetTorrentSources(store, client)
 }
 
+func (s *Server) ConfigureTorrentAttemptTimeout(timeout time.Duration) {
+	s.acquisitions.SetTorrentAttemptTimeout(timeout)
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)

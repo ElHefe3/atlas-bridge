@@ -28,6 +28,7 @@ type Manager struct {
 	maxBytes     int64
 	locators     *catalog.Store
 	transmission *torrent.Transmission
+	torrentWait  time.Duration
 }
 
 func (m *Manager) SetTorrentSources(locators *catalog.Store, client *torrent.Transmission) {
@@ -43,7 +44,14 @@ func NewManager() *Manager {
 		// A single worker is the safe default because Anna data torrents are
 		// shared across many books. Transmission de-duplicates torrents by
 		// infohash, so concurrent file-selection changes would otherwise race.
-		workers: make(chan struct{}, 1),
+		workers:     make(chan struct{}, 1),
+		torrentWait: 45 * time.Second,
+	}
+}
+
+func (m *Manager) SetTorrentAttemptTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		m.torrentWait = timeout
 	}
 }
 
@@ -113,7 +121,7 @@ func (m *Manager) run(ctx context.Context, id string, req model.AcquisitionReque
 	// fallback when a torrent has no peers or cannot be loaded.
 	var torrentErr error
 	if hasTorrentLocator {
-		torrentCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		torrentCtx, cancel := context.WithTimeout(ctx, m.torrentWait)
 		torrentErr = m.runTorrent(torrentCtx, id, req, locator)
 		cancel()
 		if torrentErr == nil {

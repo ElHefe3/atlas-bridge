@@ -13,6 +13,8 @@ Volume=/home/kreef/atlas-bridge/data:/data:Z
 Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
 Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/rpc
+Environment=ATLAS_BRIDGE_TORRENT_ATTEMPT_TIMEOUT=45s
+Environment=ATLAS_ANNA_EXTRA_ORIGINS=https://download.booksdl.org,https://wtgadtq.org
 # Bounded metadata-first catalogue sync. These are metadata payloads only;
 # content torrents remain selected per acquisition.
 Environment=ATLAS_BRIDGE_CATALOGUE_TORRENT=https://annas-archive.pk/dyn/small_file/torrents/managed_by_aa/annas_archive_meta__aacid/annas_archive_meta__aacid__zlib3_records__20240809T171652Z--20260706T193143Z.jsonl.seekable.zst.torrent

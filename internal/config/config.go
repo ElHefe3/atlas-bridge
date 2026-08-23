@@ -34,6 +34,7 @@ type Config struct {
 	CataloguePayloadLimit     int64
 	CataloguePauseFile        string
 	TransmissionRPC           string
+	TorrentAttemptTimeout     time.Duration
 }
 
 func Load() (Config, error) {
@@ -57,8 +58,9 @@ func Load() (Config, error) {
 		CataloguePayloadLimit:     intEnv("ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT", 4<<30),
 		CataloguePauseFile:        env("ATLAS_BRIDGE_CATALOGUE_PAUSE_FILE", "/data/catalogue-ingest.pause"),
 		TransmissionRPC:           env("ATLAS_TRANSMISSION_RPC", "http://transmission:9091/transmission/rpc"),
+		TorrentAttemptTimeout:     durationEnv("ATLAS_BRIDGE_TORRENT_ATTEMPT_TIMEOUT", 45*time.Second),
 	}
-	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org"))
+	c.AnnaOrigins = merge(c.AnnaMirrors, list("ATLAS_ANNA_EXTRA_ORIGINS", "https://download.booksdl.org,https://wtgadtq.org"))
 	c.LibGenOrigins = merge(c.LibGenMirrors, list("ATLAS_LIBGEN_EXTRA_ORIGINS", "https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc"))
 	c.MetadataOrigins = list("ATLAS_METADATA_ORIGINS", "https://openlibrary.org,https://covers.openlibrary.org,https://archive.org")
 	var err error
