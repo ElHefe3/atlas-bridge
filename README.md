@@ -41,6 +41,7 @@ Secrets are read from files rather than environment values:
 | `ATLAS_ANNA_EXTRA_ORIGINS` | `https://download.booksdl.org` | Exact additional cover/download origins |
 | `ATLAS_LIBGEN_MIRRORS` | Current `.gl,.bz,.la,.vg` LibGen+ mirrors | Ordered search mirrors |
 | `ATLAS_LIBGEN_EXTRA_ORIGINS` | Known Library Genesis download/CDN origins | Exact detail/download origins |
+| `ATLAS_METADATA_ORIGINS` | Open Library search and cover origins | Exact metadata-enrichment origins |
 | `ATLAS_BRIDGE_DOWNLOAD_LIMIT` | 512 MiB | Maximum proxied response size |
 | `ATLAS_BRIDGE_REQUEST_TIMEOUT` | 45 seconds | Complete upstream request timeout |
 
@@ -75,7 +76,9 @@ go run ./cmd/atlas-bridge
 
 The Anna adapter uses fixed, bounded HTML selectors and never executes page JavaScript. When a mirror returns a DDoS/browser challenge, the API returns `upstream_challenge`; it does not pretend an empty result set was successful. The official member endpoint is used only after an MD5 and requested file have been selected.
 
-For local catalogue mode, either point `ATLAS_BRIDGE_CATALOGUE_ZSTD` at a mounted lawful/public-domain metadata fixture, or configure `ATLAS_BRIDGE_CATALOGUE_TORRENT` plus `ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH`. On startup the bridge retrieves only that configured metadata file into a private staging directory, atomically renames it, then streams JSONL records through a single zstd decoder into SQLite/FTS5. It does not download or index content payload torrents. Each record may include `md5`/`aacid`, `format`, `filesize`, `coverUrl`, and a separate `torrent` plus relative `path` locator. Only a selected file is eligible for acquisition.
+For local catalogue mode, either point `ATLAS_BRIDGE_CATALOGUE_ZSTD` at a mounted lawful/public-domain metadata fixture, or configure `ATLAS_BRIDGE_CATALOGUE_TORRENT` plus `ATLAS_BRIDGE_CATALOGUE_TORRENT_PATH`. On startup the bridge retrieves only that configured metadata file into a private staging directory, atomically renames it, then streams JSONL records through a single zstd decoder into SQLite/FTS5. It does not download or index content payload torrents. `zlib3_records` supplies searchable metadata and `zlib3_files` joins the corresponding MD5, AACID, and data-torrent folder by the stable source ID. Search only advertises formats with a deterministic direct or torrent locator.
+
+For an acquisition, Bridge first uses the configured member resolver. If it is unavailable, Bridge derives the validated official data-torrent descriptor and exact AACID path, adds the torrent paused, disables every unrelated file, and starts only the requested entry through private Transmission. Book payloads remain in staging and never enter a Kavita library directly. Covers are enriched through the bounded Open Library search and cover origins and successful mappings are cached in the catalogue database.
 
 The LibGen adapter searches configured mirrors, normalizes classic result tables, and resolves download pages through bounded HTTP hops. Mirror layouts and availability change frequently, so parsing failures are explicit and retryability is communicated in the error response.
 

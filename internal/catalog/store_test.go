@@ -39,13 +39,18 @@ func TestZlib3FileMapResolvesBookFileBySourceID(t *testing.T) {
 	if err = s.Upsert(ctx, book); err != nil {
 		t.Fatal(err)
 	}
-	fixture := []byte("{\"aacid\":\"aacid__zlib3_files__x__22430000__def\",\"data_folder\":\"fixture\",\"metadata\":{\"zlibrary_id\":\"22430000\",\"md5\":\"21f19f95c4b969d06fe5860a98e29f0d\"}}\n")
+	folder := "annas_archive_data__aacid__zlib3_files__20230808T051503Z--20230808T051504Z"
+	fixture := []byte("{\"aacid\":\"aacid__zlib3_files__x__22430000__def\",\"data_folder\":\"" + folder + "\",\"metadata\":{\"zlibrary_id\":\"22430000\",\"md5\":\"21f19f95c4b969d06fe5860a98e29f0d\"}}\n")
 	if count, skipped, ingestErr := s.SyncAnnaFilesJSONL(ctx, bytes.NewReader(fixture), 0); ingestErr != nil || count != 1 || skipped != 0 {
 		t.Fatalf("ingest count=%d skipped=%d err=%v", count, skipped, ingestErr)
 	}
 	file, ok, err := s.GetFile(ctx, "anna-local", book.ExternalID, "epub")
 	if err != nil || !ok || file.MD5 != "21f19f95c4b969d06fe5860a98e29f0d" {
 		t.Fatalf("file=%#v ok=%v err=%v", file, ok, err)
+	}
+	locator, ok, err := s.GetLocator(ctx, "anna-local", book.ExternalID, "epub")
+	if err != nil || !ok || locator.Kind != LocatorTorrentFile || locator.Path != folder+"/aacid__zlib3_files__x__22430000__def" {
+		t.Fatalf("locator=%#v ok=%v err=%v", locator, ok, err)
 	}
 }
 

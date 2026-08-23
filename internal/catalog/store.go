@@ -267,6 +267,11 @@ func (s *Store) GetFile(ctx context.Context, provider, external, fileID string) 
 	return f, true, nil
 }
 
+func (s *Store) SetCoverURL(ctx context.Context, provider, external, coverURL string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE books SET cover_url=? WHERE provider_id=? AND external_id=?`, coverURL, provider, external)
+	return err
+}
+
 func sourceIDFromAACID(value string) string {
 	parts := strings.Split(value, "__")
 	if len(parts) < 5 {

@@ -42,8 +42,8 @@ type File struct {
 	Format string `json:"format"`
 	Size   *int64 `json:"size,omitempty"`
 	URL    string `json:"url"`
-	MD5    string `json:"md5,omitempty"`
-	AACID  string `json:"aacid,omitempty"`
+	MD5    string `json:"-"`
+	AACID  string `json:"-"`
 }
 
 // Acquisition is the normalized lifecycle exposed to Atlas. Source-specific

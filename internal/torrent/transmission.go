@@ -26,11 +26,13 @@ type AddRequest struct {
 	Filename    string `json:"filename,omitempty"`
 	DownloadDir string `json:"download-dir"`
 	FilesWanted []int  `json:"files-wanted,omitempty"`
+	Paused      bool   `json:"paused"`
 }
 type AddResponse struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Hash string `json:"hashString"`
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	Hash      string `json:"hashString"`
+	Duplicate bool   `json:"-"`
 }
 type Status struct {
 	ID             int     `json:"id"`
@@ -38,15 +40,22 @@ type Status struct {
 	Status         int     `json:"status"`
 	PercentDone    float64 `json:"percentDone"`
 	TotalSize      int64   `json:"totalSize"`
+	SizeWhenDone   int64   `json:"sizeWhenDone"`
 	DownloadedEver int64   `json:"downloadedEver"`
 	Error          string  `json:"errorString"`
+}
+
+type File struct {
+	Name           string `json:"name"`
+	Length         int64  `json:"length"`
+	BytesCompleted int64  `json:"bytesCompleted"`
 }
 
 func (t *Transmission) FindByName(ctx context.Context, name string) (Status, bool, error) {
 	var out struct {
 		Torrents []Status `json:"torrents"`
 	}
-	err := t.call(ctx, "torrent-get", map[string]any{"fields": []string{"id", "name", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
+	err := t.call(ctx, "torrent-get", map[string]any{"fields": []string{"id", "name", "status", "percentDone", "totalSize", "sizeWhenDone", "downloadedEver", "errorString"}}, &out)
 	if err != nil {
 		return Status{}, false, err
 	}
@@ -124,6 +133,7 @@ func (t *Transmission) Add(ctx context.Context, req AddRequest) (AddResponse, er
 	err := t.call(ctx, "torrent-add", req, &out)
 	if out.TorrentAdd.ID == 0 && out.TorrentDuplicate.ID != 0 {
 		out.TorrentAdd = out.TorrentDuplicate
+		out.TorrentAdd.Duplicate = true
 	}
 	if err == nil && out.TorrentAdd.ID == 0 {
 		err = fmt.Errorf("transmission returned no torrent id")
@@ -134,7 +144,7 @@ func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
 	var out struct {
 		Torrents []Status `json:"torrents"`
 	}
-	err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"id", "name", "status", "percentDone", "totalSize", "downloadedEver", "errorString"}}, &out)
+	err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"id", "name", "status", "percentDone", "totalSize", "sizeWhenDone", "downloadedEver", "errorString"}}, &out)
 	if err != nil {
 		return Status{}, err
 	}
@@ -143,6 +153,35 @@ func (t *Transmission) Get(ctx context.Context, id int) (Status, error) {
 	}
 	return out.Torrents[0], nil
 }
+
+func (t *Transmission) Files(ctx context.Context, id int) ([]File, error) {
+	var out struct {
+		Torrents []struct {
+			Files []File `json:"files"`
+		} `json:"torrents"`
+	}
+	if err := t.call(ctx, "torrent-get", map[string]any{"ids": []int{id}, "fields": []string{"files"}}, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Torrents) == 0 {
+		return nil, fmt.Errorf("torrent %s not found", strconv.Itoa(id))
+	}
+	return out.Torrents[0].Files, nil
+}
+
+func (t *Transmission) SelectFile(ctx context.Context, id, wanted int, total int) error {
+	unwanted := make([]int, 0, total-1)
+	for i := 0; i < total; i++ {
+		if i != wanted {
+			unwanted = append(unwanted, i)
+		}
+	}
+	return t.call(ctx, "torrent-set", map[string]any{"ids": []int{id}, "files-wanted": []int{wanted}, "files-unwanted": unwanted}, nil)
+}
+
+func (t *Transmission) Start(ctx context.Context, id int) error {
+	return t.call(ctx, "torrent-start", map[string]any{"ids": []int{id}}, nil)
+}
 func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) error {
 	return t.call(ctx, "torrent-remove", map[string]any{"ids": []int{id}, "delete-local-data": deleteData}, nil)
 }
@@ -150,26 +189,61 @@ func (t *Transmission) Remove(ctx context.Context, id int, deleteData bool) erro
 // DownloadFile queues a validated torrent and waits for the requested file to
 // complete. The caller must provide a path inside the Bridge staging root.
 func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path string, maxBytes int64) (*os.File, int64, error) {
-	name := filepath.Base(path)
-	existing, found, err := t.FindByName(ctx, name)
-	owned := false
-	if err != nil {
-		return nil, 0, err
+	if !filepath.IsAbs(path) {
+		return nil, 0, fmt.Errorf("staging path must be absolute")
 	}
-	addedID := 0
-	if found {
-		addedID = existing.ID
-	} else {
-		added, addErr := t.Add(ctx, req)
-		err = addErr
-		addedID = added.ID
-		owned = true
+	wantedPath := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(path), filepath.VolumeName(path)))
+	if req.DownloadDir != "" {
+		// The caller's host path ends with the same torrent-relative path as
+		// the Transmission download. Locate it by suffix without trusting a
+		// public request to supply file indexes.
+		wantedPath = filepath.ToSlash(path)
 	}
+	req.Paused = true
+	added, err := t.Add(ctx, req)
+	addedID := added.ID
+	owned := !added.Duplicate
 	if err != nil {
 		return nil, 0, err
 	}
 	if owned {
 		defer t.Remove(context.Background(), addedID, true)
+	}
+	var files []File
+	for len(files) == 0 {
+		files, err = t.Files(ctx, addedID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(files) == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+	}
+	wanted := -1
+	for i, file := range files {
+		name := filepath.ToSlash(filepath.Clean(file.Name))
+		if name == wantedPath || strings.HasSuffix(wantedPath, "/"+name) || strings.HasSuffix(name, "/"+filepath.Base(wantedPath)) {
+			if wanted != -1 {
+				return nil, 0, fmt.Errorf("requested torrent path is ambiguous")
+			}
+			wanted = i
+			if maxBytes > 0 && file.Length > maxBytes {
+				return nil, 0, fmt.Errorf("download exceeds configured size limit")
+			}
+		}
+	}
+	if wanted < 0 {
+		return nil, 0, fmt.Errorf("requested file is not present in torrent")
+	}
+	if err = t.SelectFile(ctx, addedID, wanted, len(files)); err != nil {
+		return nil, 0, err
+	}
+	if err = t.Start(ctx, addedID); err != nil {
+		return nil, 0, err
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -178,7 +252,7 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 		if err != nil {
 			return nil, 0, err
 		}
-		if status.TotalSize > maxBytes && maxBytes > 0 {
+		if status.SizeWhenDone > maxBytes && maxBytes > 0 {
 			return nil, 0, fmt.Errorf("torrent exceeds configured size limit")
 		}
 		if status.Error != "" {
@@ -193,11 +267,7 @@ func (t *Transmission) DownloadFile(ctx context.Context, req AddRequest, path st
 		case <-ticker.C:
 		}
 	}
-	filePath := path
-	if !filepath.IsAbs(filePath) {
-		return nil, 0, fmt.Errorf("staging path must be absolute")
-	}
-	f, err := openTorrentFile(filePath)
+	f, err := openTorrentFile(path)
 	if err != nil {
 		return nil, 0, err
 	}

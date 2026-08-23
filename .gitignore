@@ -4,4 +4,6 @@
 /.idea/
 /.vscode/
 /.cache/
-
+/.gocache/
+/atlas-bridge-linux
+/catalogue-files-ingest-linux

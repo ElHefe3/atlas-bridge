@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ElHefe3/atlas-bridge/internal/catalog"
 	"github.com/ElHefe3/atlas-bridge/internal/model"
@@ -20,6 +21,7 @@ type Manager struct {
 	mu           sync.RWMutex
 	jobs         map[string]*model.Acquisition
 	files        map[string]io.ReadCloser
+	cancels      map[string]context.CancelFunc
 	providers    map[string]model.Provider
 	staging      string
 	maxBytes     int64
@@ -33,7 +35,7 @@ func (m *Manager) SetTorrentSources(locators *catalog.Store, client *torrent.Tra
 }
 
 func NewManager() *Manager {
-	return &Manager{jobs: map[string]*model.Acquisition{}, files: map[string]io.ReadCloser{}}
+	return &Manager{jobs: map[string]*model.Acquisition{}, files: map[string]io.ReadCloser{}, cancels: map[string]context.CancelFunc{}}
 }
 
 func NewManagerWithProviders(providers []model.Provider, staging string, maxBytes int64) *Manager {
@@ -58,12 +60,24 @@ func (m *Manager) Create(_ context.Context, req model.AcquisitionRequest) (model
 	m.jobs[id] = j
 	m.mu.Unlock()
 	if m.providers != nil {
-		go m.run(id, req)
+		workerCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		m.mu.Lock()
+		m.cancels[id] = cancel
+		m.mu.Unlock()
+		go func() {
+			defer func() {
+				cancel()
+				m.mu.Lock()
+				delete(m.cancels, id)
+				m.mu.Unlock()
+			}()
+			m.run(workerCtx, id, req)
+		}()
 	}
 	return *j, nil
 }
 
-func (m *Manager) run(id string, req model.AcquisitionRequest) {
+func (m *Manager) run(ctx context.Context, id string, req model.AcquisitionRequest) {
 	m.update(id, func(j *model.Acquisition) { j.Status = model.AcquisitionResolving; j.Progress = .02 })
 	p := m.providers[req.ProviderID]
 	if p == nil {
@@ -71,18 +85,25 @@ func (m *Manager) run(id string, req model.AcquisitionRequest) {
 		return
 	}
 	m.update(id, func(j *model.Acquisition) { j.Status = model.AcquisitionDownloading; j.Progress = .05 })
+	var locator catalog.Locator
+	hasTorrentLocator := false
 	if m.locators != nil && m.transmission != nil {
-		if locator, ok, err := m.locators.GetLocator(context.Background(), req.ProviderID, req.ExternalID, req.FileID); err == nil && ok && locator.Kind == catalog.LocatorTorrentFile {
-			if err := m.runTorrent(id, req, locator); err == nil {
-				return
-			} else {
-				m.fail(id, err.Error())
-				return
-			}
+		if indexed, ok, err := m.locators.GetLocator(ctx, req.ProviderID, req.ExternalID, req.FileID); err == nil && ok && indexed.Kind == catalog.LocatorTorrentFile {
+			locator, hasTorrentLocator = indexed, true
 		}
 	}
-	remote, err := p.OpenFile(context.Background(), req.ExternalID, req.FileID)
+	// Prefer a provider's bounded direct resolver when configured. Large bulk
+	// preservation torrents are the deterministic fallback and only the chosen
+	// file is enabled in Transmission.
+	remote, err := p.OpenFile(ctx, req.ExternalID, req.FileID)
 	if err != nil {
+		if hasTorrentLocator {
+			if torrentErr := m.runTorrent(ctx, id, req, locator); torrentErr == nil {
+				return
+			} else {
+				err = torrentErr
+			}
+		}
 		m.fail(id, err.Error())
 		return
 	}
@@ -167,7 +188,7 @@ func (m *Manager) run(id string, req model.AcquisitionRequest) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) runTorrent(id string, req model.AcquisitionRequest, locator catalog.Locator) error {
+func (m *Manager) runTorrent(ctx context.Context, id string, req model.AcquisitionRequest, locator catalog.Locator) error {
 	if filepath.IsAbs(locator.Path) || strings.Contains(filepath.ToSlash(locator.Path), "../") {
 		return fmt.Errorf("unsafe torrent path")
 	}
@@ -180,7 +201,7 @@ func (m *Manager) runTorrent(id string, req model.AcquisitionRequest, locator ca
 		return err
 	}
 	defer os.RemoveAll(dir)
-	file, size, err := m.transmission.DownloadFile(context.Background(), torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: filepath.Join("/downloads", id+"-torrent")}, filepath.Join(dir, locator.Path), m.maxBytes)
+	file, size, err := m.transmission.DownloadFile(ctx, torrent.AddRequest{Metainfo: locator.Metainfo, DownloadDir: filepath.Join("/downloads", id+"-torrent")}, filepath.Join(dir, locator.Path), m.maxBytes)
 	if err != nil {
 		return err
 	}
@@ -235,7 +256,12 @@ func (m *Manager) update(id string, fn func(*model.Acquisition)) {
 	}
 }
 func (m *Manager) fail(id, msg string) {
-	m.update(id, func(j *model.Acquisition) { j.Status = model.AcquisitionFailed; j.Error = msg })
+	m.update(id, func(j *model.Acquisition) {
+		if j.Status != model.AcquisitionCancelled {
+			j.Status = model.AcquisitionFailed
+			j.Error = msg
+		}
+	})
 }
 func (m *Manager) Get(id string) (model.Acquisition, bool) {
 	m.mu.RLock()
@@ -248,12 +274,17 @@ func (m *Manager) Get(id string) (model.Acquisition, bool) {
 }
 func (m *Manager) Cancel(id string) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	j, ok := m.jobs[id]
 	if !ok {
+		m.mu.Unlock()
 		return false
 	}
 	j.Status = model.AcquisitionCancelled
+	cancel := m.cancels[id]
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return true
 }
 func (m *Manager) File(id string) (io.ReadCloser, bool) {

@@ -12,14 +12,15 @@ import (
 	"strings"
 )
 
-// LocalCatalogue exposes the file-backed catalogue as a normal provider. It
-// never performs upstream HTTP; acquisitions are resolved through catalog
-// locators by the acquisition manager.
+// LocalCatalogue exposes the file-backed catalogue as a normal provider.
+// Metadata search is local; bounded upstream requests are used only for cover
+// enrichment and deterministic acquisition resolution.
 type LocalCatalogue struct {
-	Store   *catalog.Store
-	Client  requestClient
-	Mirrors []string
-	Key     string
+	Store          *catalog.Store
+	Client         requestClient
+	MetadataClient requestClient
+	Mirrors        []string
+	Key            string
 }
 
 func (p LocalCatalogue) Info() model.ProviderInfo {
@@ -29,7 +30,9 @@ func (p LocalCatalogue) Search(ctx context.Context, q string, o model.SearchOpti
 	books, more, err := p.Store.Search(ctx, q, o.Page, o.PageSize, o.Format)
 	if err == nil {
 		for i := range books {
-			p.markCover(ctx, &books[i])
+			if err = p.prepareBook(ctx, &books[i]); err != nil {
+				break
+			}
 		}
 	}
 	return model.SearchResponse{ProviderID: "anna-local", Query: q, Page: o.Page, HasMore: more, Results: books}, err
@@ -42,45 +45,72 @@ func (p LocalCatalogue) Details(ctx context.Context, id string) (model.Book, err
 	if !ok {
 		return model.Book{}, fmt.Errorf("book not found")
 	}
-	p.markCover(ctx, &b)
+	if err = p.prepareBook(ctx, &b); err != nil {
+		return model.Book{}, err
+	}
 	return b, nil
 }
 
-func (p LocalCatalogue) markCover(ctx context.Context, book *model.Book) {
-	if strings.TrimSpace(book.CoverURL) != "" {
-		return
-	}
+// prepareBook only advertises files that have a deterministic acquisition
+// route. This prevents Atlas from presenting an Add action which can only fail
+// later with locator_unavailable.
+func (p LocalCatalogue) prepareBook(ctx context.Context, book *model.Book) error {
+	files := make([]model.File, 0, len(book.Files))
+	hasIndexedCover := false
 	for _, file := range book.Files {
-		if indexed, ok, err := p.Store.GetFile(ctx, "anna-local", book.ExternalID, file.FileID); err == nil && ok && validMD5(indexed.MD5) {
-			book.CoverURL = "indexed-md5"
-			return
+		indexed, ok, err := p.Store.GetFile(ctx, "anna-local", book.ExternalID, file.FileID)
+		if err != nil {
+			return err
+		}
+		if ok && validMD5(indexed.MD5) {
+			hasIndexedCover = true
+			if strings.TrimSpace(p.Key) != "" {
+				file.MD5, file.AACID = indexed.MD5, indexed.AACID
+				files = append(files, file)
+				continue
+			}
+		}
+		locator, locatorOK, err := p.Store.GetLocator(ctx, "anna-local", book.ExternalID, file.FileID)
+		if err != nil {
+			return err
+		}
+		if locatorOK && locator.Kind == catalog.LocatorTorrentFile && strings.TrimSpace(locator.Metainfo) != "" && strings.TrimSpace(locator.Path) != "" {
+			files = append(files, file)
 		}
 	}
+	book.Files = files
+	if strings.TrimSpace(book.CoverURL) == "" {
+		if p.MetadataClient != nil {
+			book.CoverURL = "metadata-search"
+		} else if hasIndexedCover {
+			book.CoverURL = "indexed-md5"
+		}
+	}
+	return nil
 }
 func (p LocalCatalogue) OpenCover(ctx context.Context, externalID string) (*model.RemoteFile, error) {
-	book, err := p.Details(ctx, externalID)
+	book, ok, err := p.Store.GetBook(ctx, "anna-local", externalID)
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0, 2)
-	if strings.TrimSpace(book.CoverURL) != "" {
-		paths = append(paths, book.CoverURL)
+	if !ok {
+		return nil, fmt.Errorf("book not found")
 	}
-	for _, file := range book.Files {
-		indexed, ok, lookupErr := p.Store.GetFile(ctx, "anna-local", externalID, file.FileID)
-		if lookupErr != nil {
-			return nil, lookupErr
-		}
-		if ok && validMD5(indexed.MD5) {
-			md5 := strings.ToLower(indexed.MD5)
-			paths = append(paths, "/covers/books/"+md5[0:2]+"/"+md5[2:4]+"/"+md5[4:6]+"/"+md5+".jpg")
-			break
-		}
+	paths := make([]string, 0, 2)
+	if strings.TrimSpace(book.CoverURL) != "" && book.CoverURL != "indexed-md5" && book.CoverURL != "metadata-search" {
+		paths = append(paths, book.CoverURL)
 	}
 	var last error
 	for _, raw := range paths {
 		if parsed, parseErr := url.Parse(raw); parseErr == nil && parsed.IsAbs() {
-			resp, requestErr := request(ctx, p.Client, raw, "image/*")
+			client := p.Client
+			if strings.HasSuffix(strings.ToLower(parsed.Hostname()), "openlibrary.org") && p.MetadataClient != nil {
+				client = p.MetadataClient
+			}
+			if client == nil {
+				continue
+			}
+			resp, requestErr := request(ctx, client, raw, "image/*")
 			if requestErr == nil && requireOK("anna-local", resp) == nil {
 				return remote(resp), nil
 			}
@@ -105,10 +135,57 @@ func (p LocalCatalogue) OpenCover(ctx context.Context, externalID string) (*mode
 			return remote(resp), nil
 		}
 	}
+	if cover, coverErr := p.openMetadataCover(ctx, book); coverErr == nil {
+		return cover, nil
+	} else {
+		last = coverErr
+	}
 	if last == nil {
 		last = fmt.Errorf("cover is unavailable")
 	}
 	return nil, &model.ProviderError{Code: "cover_not_found", Message: "cover is unavailable", Provider: "anna-local", Status: http.StatusNotFound}
+}
+
+func (p LocalCatalogue) openMetadataCover(ctx context.Context, book model.Book) (*model.RemoteFile, error) {
+	if p.MetadataClient == nil || strings.TrimSpace(book.Title) == "" {
+		return nil, fmt.Errorf("metadata cover lookup is unavailable")
+	}
+	values := url.Values{"title": []string{book.Title}, "limit": []string{"1"}, "fields": []string{"cover_i"}}
+	if strings.TrimSpace(book.Author) != "" {
+		values.Set("author", book.Author)
+	}
+	resp, err := request(ctx, p.MetadataClient, "https://openlibrary.org/search.json?"+values.Encode(), "application/json")
+	if err != nil {
+		return nil, err
+	}
+	if err = requireOK("anna-local", resp); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	data, err := readBounded(resp.Body, 1<<20)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Docs []struct {
+			CoverID int64 `json:"cover_i"`
+		} `json:"docs"`
+	}
+	if err = json.Unmarshal(data, &result); err != nil || len(result.Docs) == 0 || result.Docs[0].CoverID <= 0 {
+		return nil, fmt.Errorf("metadata cover was not found")
+	}
+	coverURL := fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-L.jpg", result.Docs[0].CoverID)
+	cover, err := request(ctx, p.MetadataClient, coverURL, "image/*")
+	if err != nil {
+		return nil, err
+	}
+	if err = requireOK("anna-local", cover); err != nil {
+		cover.Body.Close()
+		return nil, err
+	}
+	_ = p.Store.SetCoverURL(ctx, "anna-local", book.ExternalID, coverURL)
+	return remote(cover), nil
 }
 func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string) (*model.RemoteFile, error) {
 	if p.Store == nil || p.Client == nil || strings.TrimSpace(p.Key) == "" {
