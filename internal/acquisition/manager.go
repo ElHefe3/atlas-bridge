@@ -20,7 +20,7 @@ import (
 type Manager struct {
 	mu           sync.RWMutex
 	jobs         map[string]*model.Acquisition
-	files        map[string]io.ReadCloser
+	files        map[string]string
 	cancels      map[string]context.CancelFunc
 	providers    map[string]model.Provider
 	staging      string
@@ -35,7 +35,7 @@ func (m *Manager) SetTorrentSources(locators *catalog.Store, client *torrent.Tra
 }
 
 func NewManager() *Manager {
-	return &Manager{jobs: map[string]*model.Acquisition{}, files: map[string]io.ReadCloser{}, cancels: map[string]context.CancelFunc{}}
+	return &Manager{jobs: map[string]*model.Acquisition{}, files: map[string]string{}, cancels: map[string]context.CancelFunc{}}
 }
 
 func NewManagerWithProviders(providers []model.Provider, staging string, maxBytes int64) *Manager {
@@ -182,9 +182,7 @@ func (m *Manager) run(ctx context.Context, id string, req model.AcquisitionReque
 	}
 	m.mu.Unlock()
 	m.mu.Lock()
-	if f, err := os.Open(part); err == nil {
-		m.files[id] = f
-	}
+	m.files[id] = part
 	m.mu.Unlock()
 }
 
@@ -228,9 +226,7 @@ func (m *Manager) runTorrent(ctx context.Context, id string, req model.Acquisiti
 		j.Progress = 1
 		j.Bytes = size
 	}
-	if f, openErr := os.Open(part); openErr == nil {
-		m.files[id] = f
-	}
+	m.files[id] = part
 	m.mu.Unlock()
 	return nil
 }
@@ -288,8 +284,31 @@ func (m *Manager) Cancel(id string) bool {
 	return true
 }
 func (m *Manager) File(id string) (io.ReadCloser, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	f, ok := m.files[id]
-	return f, ok
+	m.mu.Lock()
+	path, ok := m.files[id]
+	if ok {
+		delete(m.files, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	return &cleanupFile{File: f, path: path}, true
+}
+
+type cleanupFile struct {
+	*os.File
+	path string
+}
+
+func (f *cleanupFile) Close() error {
+	err := f.File.Close()
+	if removeErr := os.Remove(f.path); err == nil && removeErr != nil && !os.IsNotExist(removeErr) {
+		err = removeErr
+	}
+	return err
 }
