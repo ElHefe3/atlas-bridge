@@ -86,3 +86,9 @@ func TestLocalCatalogueEnrichesAndPersistsCover(t *testing.T) {
 		t.Fatalf("stored=%#v ok=%v calls=%d err=%v", stored, ok, client.calls, err)
 	}
 }
+
+func TestMetadataQueryNormalizesCatalogueSlugs(t *testing.T) {
+	if got := metadataQuery("alices-adventures_in--wonderland"); got != "alices adventures in wonderland" {
+		t.Fatalf("unexpected normalized metadata query: %q", got)
+	}
+}

@@ -150,9 +150,11 @@ func (p LocalCatalogue) openMetadataCover(ctx context.Context, book model.Book) 
 	if p.MetadataClient == nil || strings.TrimSpace(book.Title) == "" {
 		return nil, fmt.Errorf("metadata cover lookup is unavailable")
 	}
-	values := url.Values{"title": []string{book.Title}, "limit": []string{"1"}, "fields": []string{"cover_i"}}
-	if strings.TrimSpace(book.Author) != "" {
-		values.Set("author", book.Author)
+	title := metadataQuery(book.Title)
+	author := metadataQuery(book.Author)
+	values := url.Values{"title": []string{title}, "limit": []string{"5"}, "fields": []string{"cover_i"}}
+	if author != "" && !strings.EqualFold(author, "unknown") && !strings.EqualFold(author, "unknown author") {
+		values.Set("author", author)
 	}
 	resp, err := request(ctx, p.MetadataClient, "https://openlibrary.org/search.json?"+values.Encode(), "application/json")
 	if err != nil {
@@ -172,10 +174,20 @@ func (p LocalCatalogue) openMetadataCover(ctx context.Context, book model.Book) 
 			CoverID int64 `json:"cover_i"`
 		} `json:"docs"`
 	}
-	if err = json.Unmarshal(data, &result); err != nil || len(result.Docs) == 0 || result.Docs[0].CoverID <= 0 {
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	var coverID int64
+	for _, doc := range result.Docs {
+		if doc.CoverID > 0 {
+			coverID = doc.CoverID
+			break
+		}
+	}
+	if coverID <= 0 {
 		return nil, fmt.Errorf("metadata cover was not found")
 	}
-	coverURL := fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-L.jpg", result.Docs[0].CoverID)
+	coverURL := fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-L.jpg", coverID)
 	cover, err := request(ctx, p.MetadataClient, coverURL, "image/*")
 	if err != nil {
 		return nil, err
@@ -186,6 +198,11 @@ func (p LocalCatalogue) openMetadataCover(ctx context.Context, book model.Book) 
 	}
 	_ = p.Store.SetCoverURL(ctx, "anna-local", book.ExternalID, coverURL)
 	return remote(cover), nil
+}
+
+func metadataQuery(value string) string {
+	value = strings.NewReplacer("-", " ", "_", " ").Replace(strings.TrimSpace(value))
+	return strings.Join(strings.Fields(value), " ")
 }
 func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string) (*model.RemoteFile, error) {
 	if p.Store == nil || p.Client == nil || strings.TrimSpace(p.Key) == "" {
