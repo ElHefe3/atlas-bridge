@@ -36,6 +36,7 @@ func Open(path string) (*Store, error) {
 	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS books (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT, description TEXT, isbn TEXT, cover_url TEXT, files_json TEXT NOT NULL, PRIMARY KEY(provider_id, external_id));
 CREATE TABLE IF NOT EXISTS file_records (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, file_id TEXT NOT NULL, md5 TEXT, aacid TEXT, format TEXT NOT NULL, size INTEGER, PRIMARY KEY(provider_id, external_id, file_id));
+CREATE TABLE IF NOT EXISTS source_file_map (source_id TEXT PRIMARY KEY, md5 TEXT NOT NULL, aacid TEXT, data_folder TEXT);
 CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(provider_id UNINDEXED, external_id UNINDEXED, title, author, isbn, content='books', content_rowid='rowid');
 CREATE TABLE IF NOT EXISTS locators (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, file_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(provider_id, external_id, file_id));`); err != nil {
 		db.Close()
@@ -94,6 +95,24 @@ type FileRecord struct {
 	ProviderID, ExternalID, FileID, MD5, AACID, Format string
 	Size                                               *int64
 	Locator                                            *Locator
+}
+
+type SourceFileMap struct {
+	SourceID, MD5, AACID, DataFolder string
+}
+
+func (s *Store) UpsertSourceFileMapsBatch(ctx context.Context, mappings []SourceFileMap) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, mapping := range mappings {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO source_file_map(source_id,md5,aacid,data_folder) VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,data_folder=excluded.data_folder`, mapping.SourceID, strings.ToLower(mapping.MD5), nullable(mapping.AACID), nullable(mapping.DataFolder)); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) upsertExec(ctx context.Context, exec sqlExecer, book model.Book, index bool) error {
@@ -235,7 +254,25 @@ func (s *Store) GetFile(ctx context.Context, provider, external, fileID string) 
 		return model.File{}, false, err
 	}
 	f.MD5, f.AACID = md5.String, aacid.String
+	if f.MD5 == "" {
+		if sourceID := sourceIDFromAACID(external); sourceID != "" {
+			var mappedMD5, mappedAACID sql.NullString
+			if mapErr := s.db.QueryRowContext(ctx, `SELECT md5,aacid FROM source_file_map WHERE source_id=?`, sourceID).Scan(&mappedMD5, &mappedAACID); mapErr == nil {
+				f.MD5, f.AACID = mappedMD5.String, mappedAACID.String
+			} else if !errors.Is(mapErr, sql.ErrNoRows) {
+				return model.File{}, false, mapErr
+			}
+		}
+	}
 	return f, true, nil
+}
+
+func sourceIDFromAACID(value string) string {
+	parts := strings.Split(value, "__")
+	if len(parts) < 5 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-2])
 }
 
 func (s *Store) Close() error { return s.db.Close() }

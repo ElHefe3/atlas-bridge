@@ -37,6 +37,8 @@ type AnnaRecord struct {
 type AnnaFileRecord struct {
 	ProviderID string `json:"providerId"`
 	ExternalID string `json:"externalId"`
+	SourceID   string `json:"sourceId"`
+	DataFolder string `json:"data_folder"`
 	MD5        string `json:"md5"`
 	AACID      string `json:"aacid"`
 	Format     string `json:"format"`
@@ -53,13 +55,21 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 	scanner.Buffer(make([]byte, 64*1024), 8<<20)
 	count, skipped := 0, 0
 	batch := make([]FileRecord, 0, 1000)
+	mappings := make([]SourceFileMap, 0, 1000)
 	flush := func() error {
-		if len(batch) == 0 {
-			return nil
+		if len(mappings) > 0 {
+			if err := s.UpsertSourceFileMapsBatch(ctx, mappings); err != nil {
+				return err
+			}
+			mappings = mappings[:0]
 		}
-		err := s.UpsertFilesBatch(ctx, batch)
-		batch = batch[:0]
-		return err
+		if len(batch) > 0 {
+			if err := s.UpsertFilesBatch(ctx, batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+		}
+		return nil
 	}
 	for scanner.Scan() {
 		if limit > 0 && count >= limit {
@@ -70,10 +80,26 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 			skipped++
 			continue
 		}
+		if r.SourceID != "" && r.MD5 != "" {
+			mappings = append(mappings, SourceFileMap{SourceID: r.SourceID, MD5: r.MD5, AACID: r.AACID, DataFolder: r.DataFolder})
+		}
 		if r.ExternalID == "" {
 			r.ExternalID = r.MD5
 		}
 		if r.ExternalID == "" || r.Format == "" {
+			if len(mappings)+len(batch) >= 1000 {
+				if err := flush(); err != nil {
+					return count, skipped, err
+				}
+			}
+			if r.SourceID != "" && r.MD5 != "" {
+				count++
+			} else {
+				skipped++
+			}
+			continue
+		}
+		if r.MD5 == "" {
 			skipped++
 			continue
 		}
@@ -92,7 +118,7 @@ func (s *Store) SyncAnnaFilesJSONL(ctx context.Context, input io.Reader, limit i
 		}
 		batch = append(batch, FileRecord{ProviderID: provider, ExternalID: r.ExternalID, FileID: fileID, MD5: r.MD5, AACID: r.AACID, Format: fileID, Size: r.Size, Locator: locator})
 		count++
-		if len(batch) >= 1000 {
+		if len(batch)+len(mappings) >= 1000 {
 			if err := flush(); err != nil {
 				return count, skipped, err
 			}
@@ -138,6 +164,12 @@ func decodeAnnaFileRecord(data []byte) (AnnaFileRecord, error) {
 	}
 	if r.AACID == "" {
 		r.AACID = str("aacid")
+	}
+	if r.SourceID == "" {
+		r.SourceID = str("sourceId", "source_id", "zlibrary_id")
+	}
+	if r.DataFolder == "" {
+		r.DataFolder = str("data_folder")
 	}
 	if r.Format == "" {
 		r.Format = str("format", "extension", "ext", "file_extension")
@@ -288,12 +320,19 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 	}
 	if r.ISBN == "" {
 		r.ISBN = str("isbn", "isbn13", "isbn_10")
+		if r.ISBN == "" {
+			if values, ok := raw["isbns"].([]any); ok && len(values) > 0 {
+				if value, ok := values[0].(string); ok {
+					r.ISBN = strings.TrimSpace(value)
+				}
+			}
+		}
 	}
 	if r.ExternalID == "" {
 		r.ExternalID = str("externalId", "external_id", "md5", "aacid")
 	}
 	if r.MD5 == "" {
-		r.MD5 = str("md5")
+		r.MD5 = str("md5", "md5_reported")
 	}
 	if r.AACID == "" {
 		r.AACID = str("aacid")
@@ -302,7 +341,7 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 		r.Format = str("format", "extension", "ext")
 	}
 	if r.CoverURL == "" {
-		r.CoverURL = str("coverUrl", "cover_url", "cover")
+		r.CoverURL = str("coverUrl", "cover_url", "cover", "cover_path")
 	}
 	if r.Torrent == "" {
 		r.Torrent = str("torrent", "torrent_url", "metainfo")
@@ -312,6 +351,9 @@ func decodeAnnaRecord(data []byte) (AnnaRecord, error) {
 	}
 	if r.Size == nil {
 		r.Size = parseInt64(raw["size"])
+	}
+	if r.Size == nil {
+		r.Size = parseInt64(raw["filesize_reported"])
 	}
 	if r.Size == nil {
 		r.Size = parseInt64(raw["filesize"])

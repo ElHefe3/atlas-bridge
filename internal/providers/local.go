@@ -27,6 +27,11 @@ func (p LocalCatalogue) Info() model.ProviderInfo {
 }
 func (p LocalCatalogue) Search(ctx context.Context, q string, o model.SearchOptions) (model.SearchResponse, error) {
 	books, more, err := p.Store.Search(ctx, q, o.Page, o.PageSize, o.Format)
+	if err == nil {
+		for i := range books {
+			p.markCover(ctx, &books[i])
+		}
+	}
 	return model.SearchResponse{ProviderID: "anna-local", Query: q, Page: o.Page, HasMore: more, Results: books}, err
 }
 func (p LocalCatalogue) Details(ctx context.Context, id string) (model.Book, error) {
@@ -37,10 +42,73 @@ func (p LocalCatalogue) Details(ctx context.Context, id string) (model.Book, err
 	if !ok {
 		return model.Book{}, fmt.Errorf("book not found")
 	}
+	p.markCover(ctx, &b)
 	return b, nil
 }
-func (p LocalCatalogue) OpenCover(context.Context, string) (*model.RemoteFile, error) {
-	return nil, fmt.Errorf("local catalogue has no cover proxy")
+
+func (p LocalCatalogue) markCover(ctx context.Context, book *model.Book) {
+	if strings.TrimSpace(book.CoverURL) != "" {
+		return
+	}
+	for _, file := range book.Files {
+		if indexed, ok, err := p.Store.GetFile(ctx, "anna-local", book.ExternalID, file.FileID); err == nil && ok && validMD5(indexed.MD5) {
+			book.CoverURL = "indexed-md5"
+			return
+		}
+	}
+}
+func (p LocalCatalogue) OpenCover(ctx context.Context, externalID string) (*model.RemoteFile, error) {
+	book, err := p.Details(ctx, externalID)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, 2)
+	if strings.TrimSpace(book.CoverURL) != "" {
+		paths = append(paths, book.CoverURL)
+	}
+	for _, file := range book.Files {
+		indexed, ok, lookupErr := p.Store.GetFile(ctx, "anna-local", externalID, file.FileID)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if ok && validMD5(indexed.MD5) {
+			md5 := strings.ToLower(indexed.MD5)
+			paths = append(paths, "/covers/books/"+md5[0:2]+"/"+md5[2:4]+"/"+md5[4:6]+"/"+md5+".jpg")
+			break
+		}
+	}
+	var last error
+	for _, raw := range paths {
+		if parsed, parseErr := url.Parse(raw); parseErr == nil && parsed.IsAbs() {
+			resp, requestErr := request(ctx, p.Client, raw, "image/*")
+			if requestErr == nil && requireOK("anna-local", resp) == nil {
+				return remote(resp), nil
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+			last = requestErr
+			continue
+		}
+		for _, mirror := range p.Mirrors {
+			target := strings.TrimRight(mirror, "/") + "/" + strings.TrimLeft(raw, "/")
+			resp, requestErr := request(ctx, p.Client, target, "image/*")
+			if requestErr != nil {
+				last = requestErr
+				continue
+			}
+			if requestErr = requireOK("anna-local", resp); requestErr != nil {
+				resp.Body.Close()
+				last = requestErr
+				continue
+			}
+			return remote(resp), nil
+		}
+	}
+	if last == nil {
+		last = fmt.Errorf("cover is unavailable")
+	}
+	return nil, &model.ProviderError{Code: "cover_not_found", Message: "cover is unavailable", Provider: "anna-local", Status: http.StatusNotFound}
 }
 func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string) (*model.RemoteFile, error) {
 	if p.Store == nil || p.Client == nil || strings.TrimSpace(p.Key) == "" {
