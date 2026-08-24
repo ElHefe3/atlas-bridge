@@ -18,6 +18,7 @@ import (
 type LocalCatalogue struct {
 	Store          *catalog.Store
 	Client         requestClient
+	DownloadClient requestClient
 	MetadataClient requestClient
 	Mirrors        []string
 	Key            string
@@ -205,7 +206,11 @@ func metadataQuery(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string) (*model.RemoteFile, error) {
-	if p.Store == nil || p.Client == nil || strings.TrimSpace(p.Key) == "" {
+	client := p.DownloadClient
+	if client == nil {
+		client = p.Client
+	}
+	if p.Store == nil || client == nil || strings.TrimSpace(p.Key) == "" {
 		return nil, &model.ProviderError{Code: "acquisition_unconfigured", Message: "local catalogue acquisition is not configured", Provider: "anna-local", Status: http.StatusServiceUnavailable}
 	}
 	f, ok, err := p.Store.GetFile(ctx, "anna-local", externalID, fileID)
@@ -218,7 +223,7 @@ func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string)
 	var last error
 	for _, mirror := range p.Mirrors {
 		target := strings.TrimRight(mirror, "/") + "/dyn/api/fast_download.json?md5=" + url.QueryEscape(strings.ToLower(f.MD5)) + "&key=" + url.QueryEscape(p.Key) + "&path_index=0"
-		resp, requestErr := request(ctx, p.Client, target, "application/json")
+		resp, requestErr := request(ctx, client, target, "application/json")
 		if requestErr != nil {
 			last = requestErr
 			continue
@@ -237,7 +242,7 @@ func (p LocalCatalogue) OpenFile(ctx context.Context, externalID, fileID string)
 			last = &model.ProviderError{Code: "download_resolution_failed", Message: safeUpstreamError(payload.Error), Provider: "anna-local", Retryable: resp.StatusCode >= 500, Status: http.StatusBadGateway}
 			continue
 		}
-		download, downloadErr := request(ctx, p.Client, *payload.DownloadURL, "application/octet-stream")
+		download, downloadErr := request(ctx, client, *payload.DownloadURL, "application/octet-stream")
 		if downloadErr != nil {
 			last = downloadErr
 			continue

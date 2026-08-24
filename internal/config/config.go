@@ -23,6 +23,7 @@ type Config struct {
 	MetadataLimit             int64
 	DownloadLimit             int64
 	RequestTimeout            time.Duration
+	DownloadRequestTimeout    time.Duration
 	CatalogueJSONL            string
 	CatalogueZstd             string
 	CatalogueFilesZstd        string
@@ -47,6 +48,7 @@ func Load() (Config, error) {
 		MetadataLimit:             intEnv("ATLAS_BRIDGE_METADATA_LIMIT", 10<<20),
 		DownloadLimit:             intEnv("ATLAS_BRIDGE_DOWNLOAD_LIMIT", 512<<20),
 		RequestTimeout:            durationEnv("ATLAS_BRIDGE_REQUEST_TIMEOUT", 45*time.Second),
+		DownloadRequestTimeout:    durationEnv("ATLAS_BRIDGE_DOWNLOAD_REQUEST_TIMEOUT", 2*time.Minute),
 		CatalogueJSONL:            env("ATLAS_BRIDGE_CATALOGUE_JSONL", ""),
 		CatalogueZstd:             env("ATLAS_BRIDGE_CATALOGUE_ZSTD", ""),
 		CatalogueFilesZstd:        env("ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD", ""),
