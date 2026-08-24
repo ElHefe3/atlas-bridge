@@ -46,7 +46,10 @@ func NewManager() *Manager {
 		// shared across many books. Transmission de-duplicates torrents by
 		// infohash, so concurrent file-selection changes would otherwise race.
 		workers:     make(chan struct{}, 1),
-		torrentWait: 45 * time.Second,
+		// A torrent may need a few minutes to discover peers even when the
+		// selected file is small. Keep this bounded, but do not fail healthy
+		// acquisitions after the HTTP header timeout used by live mirrors.
+		torrentWait: 10 * time.Minute,
 	}
 }
 
