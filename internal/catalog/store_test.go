@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ElHefe3/atlas-bridge/internal/model"
@@ -26,6 +27,32 @@ func TestSearchAndUpsert(t *testing.T) {
 	if more || len(got) != 1 || got[0].ExternalID != b.ExternalID {
 		t.Fatalf("unexpected result: %#v, more=%v", got, more)
 	}
+}
+
+func TestConcurrentCatalogueWritersAreSerialized(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "catalogue.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			book := model.Book{ProviderID: "anna-local", ExternalID: string(rune('a' + i)), Title: "Concurrent book", Files: []model.File{{FileID: "epub", Format: "epub"}}}
+			if err := s.Upsert(ctx, book); err != nil {
+				t.Errorf("upsert %d: %v", i, err)
+				return
+			}
+			if err := s.SetCoverURL(ctx, book.ProviderID, book.ExternalID, "https://example.invalid/cover.jpg"); err != nil {
+				t.Errorf("cover %d: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestZlib3FileMapResolvesBookFileBySourceID(t *testing.T) {

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -19,7 +21,10 @@ import (
 
 // Store is a small embedded catalogue. It intentionally stores only normalized
 // metadata; source credentials and signed URLs are never persisted here.
-type Store struct{ db *sql.DB }
+type Store struct {
+	db      *sql.DB
+	writeMu sync.Mutex
+}
 type sqlExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -33,6 +38,8 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(8)
 	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS books (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT, description TEXT, isbn TEXT, cover_url TEXT, files_json TEXT NOT NULL, PRIMARY KEY(provider_id, external_id));
 CREATE TABLE IF NOT EXISTS file_records (provider_id TEXT NOT NULL, external_id TEXT NOT NULL, file_id TEXT NOT NULL, md5 TEXT, aacid TEXT, format TEXT NOT NULL, size INTEGER, PRIMARY KEY(provider_id, external_id, file_id));
@@ -42,53 +49,103 @@ CREATE TABLE IF NOT EXISTS locators (provider_id TEXT NOT NULL, external_id TEXT
 		db.Close()
 		return nil, err
 	}
+	// This is a first line of defence for readers and external maintenance
+	// tools. All bridge writes are also serialized and retried below.
+	_, _ = db.Exec(`PRAGMA busy_timeout=30000`)
 	return &Store{db: db}, nil
 }
 
 func (s *Store) Upsert(ctx context.Context, book model.Book) error {
-	return s.upsertExec(ctx, s.db, book, true)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error { return s.upsertExec(ctx, s.db, book, true) })
 }
 
 func (s *Store) UpsertBatch(ctx context.Context, books []model.Book) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	for _, book := range books {
-		if err := s.upsertExec(ctx, tx, book, false); err != nil {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		for _, book := range books {
+			if err := s.upsertExec(ctx, tx, book, false); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+		return nil
+	})
 }
 
 func (s *Store) UpsertFilesBatch(ctx context.Context, files []FileRecord) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO file_records(provider_id,external_id,file_id,md5,aacid,format,size) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,format=excluded.format,size=excluded.size`, f.ProviderID, f.ExternalID, f.FileID, nullable(f.MD5), nullable(f.AACID), f.Format, f.Size); err != nil {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO file_records(provider_id,external_id,file_id,md5,aacid,format,size) VALUES(?,?,?,?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET md5=excluded.md5,aacid=excluded.aacid,format=excluded.format,size=excluded.size`, f.ProviderID, f.ExternalID, f.FileID, nullable(f.MD5), nullable(f.AACID), f.Format, f.Size); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			if f.Locator != nil {
+				data, err := json.Marshal(*f.Locator)
+				if err != nil {
+					_ = tx.Rollback()
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO locators(provider_id,external_id,file_id,data) VALUES(?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET data=excluded.data`, f.Locator.ProviderID, f.Locator.ExternalID, f.Locator.FileID, string(data)); err != nil {
+					_ = tx.Rollback()
+					return err
+				}
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
-		if f.Locator != nil {
-			data, err := json.Marshal(*f.Locator)
-			if err != nil {
-				_ = tx.Rollback()
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO locators(provider_id,external_id,file_id,data) VALUES(?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET data=excluded.data`, f.Locator.ProviderID, f.Locator.ExternalID, f.Locator.FileID, string(data)); err != nil {
-				_ = tx.Rollback()
-				return err
-			}
+		return nil
+	})
+}
+
+// withWriteRetry makes ingestion resilient to short-lived WAL/checkpoint
+// contention from API writes and maintenance operations. The mutex prevents
+// bridge goroutines from competing with each other; retries cover readers or
+// external sqlite tools that may still hold a lock.
+func (s *Store) withWriteRetry(ctx context.Context, fn func() error) error {
+	backoff := 100 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		err := fn()
+		if err == nil || !isSQLiteBusy(err) || attempt >= 9 {
+			return err
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < 2*time.Second {
+			backoff *= 2
 		}
 	}
-	return tx.Commit()
+}
+
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database table is locked")
 }
 
 type FileRecord struct {
@@ -290,8 +347,12 @@ func (s *Store) GetFile(ctx context.Context, provider, external, fileID string) 
 }
 
 func (s *Store) SetCoverURL(ctx context.Context, provider, external, coverURL string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE books SET cover_url=? WHERE provider_id=? AND external_id=?`, coverURL, provider, external)
-	return err
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error {
+		_, err := s.db.ExecContext(ctx, `UPDATE books SET cover_url=? WHERE provider_id=? AND external_id=?`, coverURL, provider, external)
+		return err
+	})
 }
 
 func sourceIDFromAACID(value string) string {
@@ -330,8 +391,23 @@ func (s *Store) IngestJSONL(ctx context.Context, input io.Reader, limit int) (in
 }
 
 func (s *Store) RebuildFTS(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO books_fts(rowid,provider_id,external_id,title,author,isbn) SELECT rowid,provider_id,external_id,title,author,isbn FROM books`)
-	return err
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM books_fts`); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO books_fts(rowid,provider_id,external_id,title,author,isbn) SELECT rowid,provider_id,external_id,title,author,isbn FROM books`); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		return tx.Commit()
+	})
 }
 
 func (s *Store) String() string { return fmt.Sprintf("catalogue(%p)", s) }

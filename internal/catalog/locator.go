@@ -36,8 +36,12 @@ func (s *Store) PutLocator(ctx context.Context, l Locator) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS locators(provider_id TEXT, external_id TEXT, file_id TEXT, data TEXT NOT NULL, PRIMARY KEY(provider_id,external_id,file_id)); INSERT INTO locators(provider_id,external_id,file_id,data) VALUES(?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET data=excluded.data`, l.ProviderID, l.ExternalID, l.FileID, string(data))
-	return err
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.withWriteRetry(ctx, func() error {
+		_, err = s.db.ExecContext(ctx, `INSERT INTO locators(provider_id,external_id,file_id,data) VALUES(?,?,?,?) ON CONFLICT(provider_id,external_id,file_id) DO UPDATE SET data=excluded.data`, l.ProviderID, l.ExternalID, l.FileID, string(data))
+		return err
+	})
 }
 func (s *Store) GetLocator(ctx context.Context, provider, externalID, fileID string) (Locator, bool, error) {
 	var raw string
