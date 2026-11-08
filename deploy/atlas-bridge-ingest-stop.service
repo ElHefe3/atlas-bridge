@@ -1,0 +1,6 @@
+[Unit]
+Description=Pause Atlas catalogue ingestion for daytime
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'printf "pause %s\n" "$(date -Is)" >> @LIBRARY_ROOT@/atlas-bridge/data/ingest-window.log; printf "paused by schedule %s\n" "$(date -Is)" > @LIBRARY_ROOT@/atlas-bridge/data/catalogue-ingest.pause; systemctl --user restart atlas-bridge.service'

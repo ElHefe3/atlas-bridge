@@ -1,0 +1,6 @@
+[Unit]
+Description=Resume Atlas catalogue ingestion overnight
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'printf "resume %s\n" "$(date -Is)" >> @LIBRARY_ROOT@/atlas-bridge/data/ingest-window.log; rm -f @LIBRARY_ROOT@/atlas-bridge/data/catalogue-ingest.pause; systemctl --user restart atlas-bridge.service'

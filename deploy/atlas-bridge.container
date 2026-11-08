@@ -1,16 +1,19 @@
 [Unit]
+StartLimitIntervalSec=0
 Description=Atlas Bridge
 After=network-online.target transmission.service
 Wants=network-online.target transmission.service
 
 [Container]
-Image=ghcr.io/elhefe3/atlas-bridge:edge
+# install.sh keeps the live Image= line. The updater retags pulled images into
+# this local pin, so Quadlet never pulls on its own.
+Image=localhost/atlas-bridge:current
 ContainerName=atlas-bridge
 Pull=never
 Network=atlas-bridge.network
 UserNS=keep-id:uid=65532,gid=65532
-Volume=/home/kreef/atlas-bridge/data:/data:Z
-Volume=/home/kreef/.config/atlas-bridge/secrets:/run/secrets:ro,Z
+Volume=@LIBRARY_ROOT@/atlas-bridge/data:/data:Z
+Volume=@LIBRARY_ROOT@/.config/atlas-bridge/secrets:/run/secrets:ro,Z
 Environment=ATLAS_BRIDGE_PUBLIC_BASE_URL=http://atlas-bridge:8080
 Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/rpc
 Environment=ATLAS_BRIDGE_TORRENT_ATTEMPT_TIMEOUT=10m
@@ -26,14 +29,18 @@ Environment=ATLAS_BRIDGE_CATALOGUE_FILES_TORRENT_PATH=annas_archive_meta__aacid_
 Environment=ATLAS_BRIDGE_CATALOGUE_FILES_ZSTD=/data/zlib3-files.jsonl.zst
 Environment=ATLAS_BRIDGE_CATALOGUE_PAYLOAD_LIMIT=32212254720
 Environment=ATLAS_BRIDGE_CATALOGUE_MAX_EXPANDED=128849018880
-# Set ATLAS_BRIDGE_CATALOGUE_ZSTD to a mounted lawful/public-domain fixture
-# when enabling local metadata ingestion; content torrents are never indexed.
+# Ingestion runs only while /data/catalogue-ingest.pause is absent; see the
+# atlas-bridge-ingest-* units. Content torrents are never indexed.
 HealthCmd=/usr/local/bin/atlas-bridge healthcheck
 HealthInterval=30s
 HealthTimeout=10s
 HealthRetries=3
 
 [Service]
+RestartSec=15s
+MemoryMax=1536M
+CPUQuota=150%
+TasksMax=256
 Restart=always
 TimeoutStartSec=90
 

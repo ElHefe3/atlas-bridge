@@ -1,0 +1,8 @@
+[Unit]
+Description=Atlas interrupted-update recovery on M900
+After=atlas-bridge.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I @LIBRARY_UPDATER@ recover
+[Install]
+WantedBy=default.target
