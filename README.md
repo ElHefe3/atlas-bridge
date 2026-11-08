@@ -97,8 +97,22 @@ Runtime plugins, shelling out, JavaScript evaluation, and arbitrary URL forwardi
 
 ## Deployment
 
-The deployment files create a rootless Podman network and container without publishing a host port. Kavita Atlas must join `atlas-bridge.network`, and both provider settings must enable private-network access because their manifest base URL is the internal `http://atlas-bridge:8080` service name.
+`deploy/` is the source of truth for the production library host. That host is M900 (`lab-pta-03`), where the locked rootless `lab-library` account runs Kavita Atlas, Atlas Bridge and Transmission from its secondary SSD. [deploy/library.env](deploy/library.env) holds the layout. Paths under `LIBRARY_ROOT` (the `current` generation symlink) are shared with the homelab backup and maintenance tools, so keep them stable.
 
-Run `deploy/install.sh` as `kreef` after copying the repository to the server. It generates but does not print the bridge token, installs the provider manifests, and starts the service. Enter that token through Atlas's credential UI. To enable Anna member downloads, create `/home/kreef/.config/atlas-bridge/secrets/anna-key` interactively with mode `0600`, then restart `atlas-bridge.service`.
+The Quadlets create a rootless Podman network and containers without publishing a host port. Kavita Atlas joins `atlas-bridge.network`. Both provider settings must enable private-network access, because their manifest base URL is the internal service name `http://atlas-bridge:8080`.
 
-Metadata cache data contains no credentials or signed download URLs and may be deleted while the service is stopped. The update timer retains the previous image and restores it when the new container fails its health check.
+Run the installer as root on the library host from a checkout of this repository:
+
+```sh
+sudo bash deploy/install.sh            # compare repo with live files; changes nothing
+sudo bash deploy/install.sh --apply    # back up, install, verify, roll back on failure
+sudo bash <backup-dir>/restore.sh      # return to a backup
+```
+
+`--apply` waits for the shared update/backup lock and refuses to run if production is unhealthy or an image update is mid-recovery. It then writes a backup to `$LIBRARY_HOME/deploy-backups/<UTC time>/`. The backup holds the managed files, their hashes, unit enablement and running image IDs, a tarball of both unit directories, and a standalone `restore.sh`. After installing, it validates the Quadlets with the Podman generator, reloads systemd, and restarts the bridge or Transmission only when their definitions changed in substance. It then checks that the bridge, Transmission and Kavita are all healthy. Any failure restores the backup automatically.
+
+The installer manages only Atlas Bridge's own files and never touches Kavita's definitions, data, secrets or images. It keeps the live `Image=` lines, so it never changes which image runs. Provider manifests are compared but never overwritten. On a fresh host it also creates the data directories, the lock and the registry auth file. It generates a bridge token without printing it (enter that token in Atlas's credential UI) and installs the manifests. To enable Anna member downloads, create `$LIBRARY_ROOT/.config/atlas-bridge/secrets/anna-key` interactively with mode `0600`, then restart `atlas-bridge.service`.
+
+Images are updated by `atlas-bridge-update.timer`, which runs [deploy/atlas-bridge-updater.py](deploy/atlas-bridge-updater.py) every 30 minutes. The updater is installed root-owned at `LIBRARY_UPDATER`. It pulls `ghcr.io/elhefe3/atlas-bridge:edge` and retags it into the Quadlet's local pin. A durable recovery record restores the previous image if the new container fails its health check, including after an interrupted update. Catalogue ingestion is controlled by `/data/catalogue-ingest.pause` and the `atlas-bridge-ingest-*` timers, which are installed disabled.
+
+Metadata cache data contains no credentials or signed download URLs and may be deleted while the service is stopped.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Pause Atlas catalogue ingestion in the morning
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+Unit=atlas-bridge-ingest-stop.service
+
+[Install]
+WantedBy=timers.target

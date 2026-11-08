@@ -1,0 +1,10 @@
+[Unit]
+Description=Resume Atlas catalogue ingestion at night
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+Unit=atlas-bridge-ingest-start.service
+
+[Install]
+WantedBy=timers.target
