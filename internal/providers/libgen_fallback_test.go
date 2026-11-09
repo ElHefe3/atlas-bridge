@@ -146,3 +146,25 @@ func TestLibGenDetailCandidatesKeepOrderAndSkipDuplicates(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestLibGenReportsTheOwnMirrorErrorNotTheLastMirrorTried(t *testing.T) {
+	client := &hostRoutedClient{routes: map[string]func(*http.Request) (*http.Response, error){
+		"libgen.bz": mirror("cdn5.booksdl.lc"),
+		"cdn5.booksdl.lc": func(r *http.Request) (*http.Response, error) {
+			return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: errors.New("origin cdn5.booksdl.lc is not allowed")}
+		},
+		"libgen.vg": func(r *http.Request) (*http.Response, error) {
+			return nil, &url.Error{Op: "Get", URL: r.URL.String(), Err: errors.New("connection refused")}
+		},
+	}}
+	l := newFallbackLibGen(t, client, "https://libgen.bz", "https://libgen.vg")
+
+	_, err := l.OpenFile(context.Background(), fallbackID, "0-pdf")
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) || !strings.Contains(pe.Message, "origin cdn5.booksdl.lc is not allowed") {
+		t.Fatalf("expected the own-mirror cause, got %v", err)
+	}
+	if len(client.calls) != 3 {
+		t.Fatalf("fallback should still try the other mirror; calls = %v", client.calls)
+	}
+}
