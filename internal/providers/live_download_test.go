@@ -8,6 +8,11 @@
 //	ATLAS_LIVE_QUERY="ley farming" ATLAS_LIVE_BOOKS=8 go test -tags live ...
 //
 // Only the first bytes of each file are read, to check the signature; nothing is saved.
+//
+// LibGen's CDN allows about 50 files per 300 seconds per IP, and production shares
+// this network's public IP. The test therefore opens at most 20 files, waits
+// ATLAS_LIVE_DELAY between them (default 2s), and stops at the first rate-limit
+// answer so it never blocks real downloads.
 package providers
 
 import (
@@ -55,6 +60,14 @@ func TestLiveLibGenDownloads(t *testing.T) {
 
 	query := envOr("ATLAS_LIVE_QUERY", "Mechanized Farming")
 	limit, _ := strconv.Atoi(envOr("ATLAS_LIVE_BOOKS", "5"))
+	if limit < 1 || limit > maxLiveBooks {
+		limit = min(max(limit, 1), maxLiveBooks)
+		fmt.Printf("ATLAS_LIVE_BOOKS limited to %d to stay well under LibGen's per-IP download limit\n", limit)
+	}
+	delay, err := time.ParseDuration(envOr("ATLAS_LIVE_DELAY", "2s"))
+	if err != nil || delay < time.Second {
+		delay = time.Second
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	found, err := libgen.Search(ctx, query, model.SearchOptions{Page: 1, PageSize: 25})
@@ -75,8 +88,16 @@ func TestLiveLibGenDownloads(t *testing.T) {
 			continue
 		}
 		file := details.Files[0]
+		if i > 0 {
+			time.Sleep(delay)
+		}
 		started := time.Now()
 		remote, err := libgen.OpenFile(ctx, book.ExternalID, file.FileID)
+		var pe *model.ProviderError
+		if errors.As(err, &pe) && pe.Code == "upstream_rate_limited" {
+			fmt.Printf("  STOP LibGen's CDN download limit is active for this IP (it also affects production); wait 5 minutes and rerun\n")
+			t.Skip("LibGen rate limit active")
+		}
 		if err != nil {
 			fmt.Printf("  FAIL %s %-5s %s\n       %s\n", book.ExternalID, file.Format, title(details.Title), describe(err))
 			failures++
@@ -91,6 +112,9 @@ func TestLiveLibGenDownloads(t *testing.T) {
 		t.Errorf("%d of the first %d books could not be opened", failures, min(limit, len(found.Results)))
 	}
 }
+
+// maxLiveBooks keeps a run far below the CDN's ~50 files per 300 seconds.
+const maxLiveBooks = 20
 
 // loadProductionEnvironment applies the Environment= lines of the production Quadlet.
 func loadProductionEnvironment(t *testing.T, path string) {
