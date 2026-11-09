@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -198,19 +200,59 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 	if err != nil {
 		return nil, err
 	}
-	if err = requireOK("libgen", fileResp); err != nil {
-		fileResp.Body.Close()
-		return nil, err
-	}
 	reader := bufio.NewReader(fileResp.Body)
+	if fileResp.StatusCode < 200 || fileResp.StatusCode >= 300 {
+		pageErr := libgenErrorPage(fileResp.StatusCode, reader)
+		fileResp.Body.Close()
+		return nil, pageErr
+	}
 	signature, peekErr := reader.Peek(5)
 	if peekErr != nil || format == "pdf" && !bytes.Equal(signature, []byte("%PDF-")) ||
 		format == "epub" && !bytes.HasPrefix(signature, []byte{'P', 'K', 3, 4}) {
+		// The CDN answers some failures, including its rate limit, with an HTML
+		// page and status 200; classify that page instead of reporting a bad file.
+		pageErr := libgenErrorPage(fileResp.StatusCode, reader)
 		fileResp.Body.Close()
-		return nil, &model.ProviderError{Code: "invalid_upstream_file", Message: "LibGen did not return the requested book file", Provider: "libgen", Retryable: true, Status: http.StatusBadGateway}
+		return nil, pageErr
 	}
 	fileResp.Body = &readerReadCloser{Reader: reader, Closer: fileResp.Body}
 	return remote(fileResp), nil
+}
+
+var (
+	htmlTags       = regexp.MustCompile(`(?s)<[^>]*>`)
+	htmlWhitespace = regexp.MustCompile(`\s+`)
+)
+
+// libgenErrorPage classifies a LibGen CDN response that is not the requested
+// book. The CDN enforces a per-IP limit (about 50 files per 300 seconds) and
+// reports it as an HTML page, with status 500 or 200; that case becomes a
+// retryable rate-limit error. Anything else keeps a short excerpt of the page so
+// the cause is visible in the bridge log.
+func libgenErrorPage(status int, body io.Reader) error {
+	raw, _ := io.ReadAll(io.LimitReader(body, 8<<10))
+	decoded := strings.ReplaceAll(html.UnescapeString(htmlTags.ReplaceAllString(string(raw), " ")), " ", " ")
+	text := strings.TrimSpace(htmlWhitespace.ReplaceAllString(decoded, " "))
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "downloaded too much files") || strings.Contains(lower, "too many downloads") || status == http.StatusTooManyRequests {
+		return &model.ProviderError{Code: "upstream_rate_limited", Message: "LibGen's download limit was reached; try again in a few minutes",
+			Provider: "libgen", Retryable: true, Status: http.StatusServiceUnavailable}
+	}
+	if len(text) > 160 {
+		text = text[:160] + "…"
+	}
+	if status >= 300 {
+		message := fmt.Sprintf("upstream returned HTTP %d", status)
+		if text != "" {
+			message += ": " + text
+		}
+		return &model.ProviderError{Code: "upstream_http_error", Message: message, Provider: "libgen", Retryable: status >= 500, Status: http.StatusBadGateway}
+	}
+	message := "LibGen did not return the requested book file"
+	if text != "" {
+		message += " (it returned a page: " + text + ")"
+	}
+	return &model.ProviderError{Code: "invalid_upstream_file", Message: message, Provider: "libgen", Retryable: true, Status: http.StatusBadGateway}
 }
 
 func resolveLibGenDownload(doc *goquery.Document, detail, format string) string {
