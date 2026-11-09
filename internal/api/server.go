@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -278,9 +279,34 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	if pe.Status >= 500 {
-		s.logger.Warn("request failed", "id", w.Header().Get("X-Request-ID"), "provider", pe.Provider, "code", pe.Code)
+		provider := pe.Provider
+		if provider == "" {
+			provider = r.PathValue("provider")
+		}
+		// The client only ever sees the code; the log carries the cause so an
+		// unclassified failure (for example a refused redirect origin) is diagnosable.
+		s.logger.Warn("request failed", "id", w.Header().Get("X-Request-ID"), "provider", provider, "code", pe.Code, "cause", logSafeCause(err))
 	}
 	writeJSON(w, pe.Status, map[string]any{"code": pe.Code, "message": pe.Message, "providerId": pe.Provider, "retryable": pe.Retryable, "requestId": w.Header().Get("X-Request-ID")})
+}
+
+// urlQuery matches the query string of any http(s) URL inside an error message.
+// Upstream URLs carry credentials there (Anna's member key, LibGen CDN keys).
+var urlQuery = regexp.MustCompile(`(https?://[^\s"'?#]+)\?[^\s"'#]*`)
+
+const maxLoggedCause = 400
+
+// logSafeCause renders an error for the log with every URL query removed and the
+// length bounded, so a cause can be logged without leaking upstream credentials.
+func logSafeCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	cause := urlQuery.ReplaceAllString(err.Error(), "$1?[redacted]")
+	if len(cause) > maxLoggedCause {
+		cause = cause[:maxLoggedCause] + "…"
+	}
+	return cause
 }
 
 func bad(code, message string) error {
