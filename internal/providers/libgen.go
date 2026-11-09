@@ -180,7 +180,10 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 	// LibGen mirrors and the CDN hosts they redirect to fail independently (521/522
 	// from Cloudflare, dead DNS, bad certificates), and each mirror may hand out a
 	// different CDN. Try the book's own mirror first, then the same page elsewhere.
-	var lastErr error
+	// The book's own mirror gives the most specific failure (for example a CDN
+	// origin that is not allowed); a later mirror that is simply down must not
+	// replace it in the error the caller sees.
+	var firstErr error
 	for attempt, candidate := range libgenDetailCandidates(detail, l.mirrors) {
 		if attempt == maxLibGenDownloadAttempts {
 			break
@@ -189,14 +192,20 @@ func (l *LibGen) OpenFile(ctx context.Context, id, fileID string) (*model.Remote
 		if err == nil {
 			return file, nil
 		}
-		lastErr = classifyLibGenError(err)
+		err = classifyLibGenError(err)
 		var pe *model.ProviderError
-		if ctx.Err() != nil || errors.As(lastErr, &pe) && pe.Code == "upstream_rate_limited" {
+		if errors.As(err, &pe) && pe.Code == "upstream_rate_limited" {
 			// The CDN limit is per IP; other mirrors share it, so retrying only extends it.
+			return nil, err
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, lastErr
+	return nil, firstErr
 }
 
 // maxLibGenDownloadAttempts bounds mirror fallback so one import cannot spend much
