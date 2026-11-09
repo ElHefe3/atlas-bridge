@@ -82,6 +82,14 @@ For an acquisition, Bridge first uses the configured member resolver. If it is u
 
 The LibGen adapter searches configured mirrors, normalizes classic result tables, and resolves download pages through bounded HTTP hops. Mirror layouts and availability change frequently, so parsing failures are explicit and retryability is communicated in the error response.
 
+LibGen also rotates the CDN hosts it redirects downloads to. Each one must be listed in `ATLAS_LIBGEN_EXTRA_ORIGINS`, which production sets in `deploy/atlas-bridge.container`. To check live downloads with exactly that configuration, run:
+
+```sh
+go test -tags live -run TestLiveLibGenDownloads -count=1 -v ./internal/providers/
+```
+
+The test searches LibGen for `ATLAS_LIVE_QUERY` (default "Mechanized Farming") and opens the first `ATLAS_LIVE_BOOKS` files (default 5). For each one it prints the real error, such as `origin cdn4.booksdl.lc is not allowed`. It reads only each file's signature and saves nothing.
+
 ## Adding an adapter
 
 Implement the compile-time `model.Provider` interface and register it in `cmd/atlas-bridge/main.go`. An adapter must:

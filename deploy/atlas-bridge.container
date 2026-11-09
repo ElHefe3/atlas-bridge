@@ -19,6 +19,9 @@ Environment=ATLAS_TRANSMISSION_RPC=http://atlas-transmission:9091/transmission/r
 Environment=ATLAS_BRIDGE_TORRENT_ATTEMPT_TIMEOUT=10m
 Environment=ATLAS_BRIDGE_DOWNLOAD_REQUEST_TIMEOUT=2m
 Environment=ATLAS_ANNA_EXTRA_ORIGINS=https://download.booksdl.org,https://wtgadtq.org
+# LibGen rotates its download CDN hosts. Verify a change with the live test:
+#   go test -tags live -run TestLiveLibGenDownloads -count=1 -v ./internal/providers/
+Environment=ATLAS_LIBGEN_EXTRA_ORIGINS=https://library.lol,https://download.booksdl.org,https://cdn1.booksdl.lc,https://cdn2.booksdl.lc,https://cdn3.booksdl.lc,https://cdn4.booksdl.lc
 # Bounded metadata-first catalogue sync. These are metadata payloads only;
 # content torrents remain selected per acquisition.
 Environment=ATLAS_BRIDGE_CATALOGUE_TORRENT=https://annas-archive.pk/dyn/small_file/torrents/managed_by_aa/annas_archive_meta__aacid/annas_archive_meta__aacid__zlib3_records__20240809T171652Z--20260706T193143Z.jsonl.seekable.zst.torrent
